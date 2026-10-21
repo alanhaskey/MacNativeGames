@@ -363,6 +363,28 @@
       ],
       "item": "small-key",
       "note": "eleven flags in a 1.5-minute window; 0x5976A9AE 0xFFFFFFFF -> 0x0000000B (counter init?)"
+    },
+    {
+      "at": "2026-10-21T21:43+08:00",
+      "event": "shrine-2-completed",
+      "saves": [
+        "slot_00@21:41:36",
+        "slot_01@21:43:08"
+      ],
+      "newFlags": [
+        "0x1BB6F474",
+        "0x29531E1C",
+        "0x31DDBC6C",
+        "0x54C6054D",
+        "0xA910961F",
+        "0xBF30C4E2",
+        "0xE400ED74"
+      ],
+      "items": [
+        "light-of-blessing",
+        "battery-set"
+      ],
+      "note": "伊恩伊萨神庙 completion + battery. None of these equals the ten flags of shrine-1 completion, so completion flags are per-shrine too. 0x31AB5580 5->12 (a counter/bitfield)."
     }
   ],
   "findings": {
@@ -397,7 +419,8 @@
     "prerequisites": "some objects have prerequisites (a reward chest behind a monster hunt). One save delta can then contain several events at once; the wiki binder must treat mixed deltas as multi-event and either split by marker type/position or queue them for review instead of marking one object blindly.",
     "windowLength": "the delta can only be as clean as the save interval: korok #2 had 14 s between saves and yielded exactly one flag; the travel korok had 7.5 min and yielded nine, mixing events. The bridge must expose the interval/savedAt and the consumer should treat long windows as multi-event (review queue).",
     "shrineDiscovery": "shrine-1 discovery flag 0x5F6180D7; shrine-2 discovery produced six flags, none equal to it: discovery flags are per-shrine, and the group can include first-time flags",
-    "counters": "0x161D8560 increments when a shrine is activated (1->2), and 0x16D9641D / 0x63866C56 / 0x9DD69D5F / 0xC41B7240 also increment on discovery - these are counters, not per-object flags"
+    "counters": "0x161D8560 increments when a shrine is activated (1->2), and 0x16D9641D / 0x63866C56 / 0x9DD69D5F / 0xC41B7240 also increment on discovery - these are counters, not per-object flags",
+    "shrineCompletion": "shrine-1 completion: ten flags; shrine-2 completion: seven flags, no overlap. Both discovery and completion are per-shrine; the battery reward may add its own flags inside the same delta."
   },
   "openQuestions": [
     "a clean ordinary chest test (save immediately before/after) to see the minimal chest group",

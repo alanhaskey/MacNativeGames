@@ -232,12 +232,26 @@
     },
     {
       "at": "2026-10-21T21:19+08:00",
-      "event": "chest-4-attempt",
+      "event": "monster-hunt-completed-and-reward-chest",
       "saves": [
         "slot_00@21:18:33",
         "slot_04@21:19:42"
       ],
-      "newFlags": [],
+      "newFlags": [
+        "0x166A6CD2",
+        "0x1EE3BE73",
+        "0x23112E94",
+        "0x244CF040",
+        "0x362180F6",
+        "0x42FF419D",
+        "0x55666DD9",
+        "0x732B5674",
+        "0x793672F2",
+        "0x8534337E",
+        "0x9ECBC832",
+        "0x9F060CB2",
+        "0xB7DBF07E"
+      ],
       "counter": {
         "hour": 8,
         "minute": [
@@ -245,7 +259,7 @@
           5
         ]
       },
-      "note": "ambiguous: the two saves the player named (8:00 -> 8:05) show no new flag; thirteen flags appeared in the previous window 21:17:05 -> 21:18:33, so the chest may have been opened before the 21:18 save (or those were first-time flags). needs a clean re-test."
+      "note": "the chest needs a monster hunt cleared first. The player opened it before the 21:18:33 save; that is why the save pair 21:18:33 -> 21:19:42 shows no new flag. The thirteen flags in the 21:17:05 -> 21:18:33 window are therefore a mixed event: monster-hunt completion + reward chest (and possibly first-time flags)."
     }
   ],
   "findings": {
@@ -276,10 +290,11 @@
         }
       ],
       "note": "the player reported the in-game clock at both saves; hour 0x449B3BA6 and minute 0x2106FA19 match exactly"
-    }
+    },
+    "prerequisites": "some objects have prerequisites (a reward chest behind a monster hunt). One save delta can then contain several events at once; the wiki binder must treat mixed deltas as multi-event and either split by marker type/position or queue them for review instead of marking one object blindly."
   },
   "openQuestions": [
-    "clean chest re-test: manual save immediately before and after the chest, with exact save times",
+    "a clean ordinary chest test (manual save immediately before/after) to confirm the chest group shape",
     "which of the six keys in the first-korok window belongs to the korok itself?",
     "does a second shrine completion produce a different ten-key group?",
     "bubbul gems, caves, side adventures, other game versions"

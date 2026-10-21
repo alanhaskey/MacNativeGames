@@ -47,6 +47,33 @@
   - 神庙：地图对象里的 Dungeon 索引 → 坐标/GUID → wiki 神庙标记（或直接把 index→GUID 建表）；
   - 井/深穴/旅行克洛格：同样用 GUID→坐标。
 
+## 3.5 已生成的映射表（2026-10-21 夜）
+
+`games/totk/scripts/diag/romfs_map_objects.py`：RomFS 读取 + zstd 字典 + BYAML v4/v7（大端/小端）解析。
+`games/totk/scripts/diag/build_save_marker_map.py`：生成"存档 hash → wiki 标记"映射。
+
+- 输入：`Banc/*/LocationArea/*.locationarea.byml.zs`（BYAML v7 小端）
+  + wiki `data/content/map-content.json`（按坐标匹配，wiki 的 z = -RomFS Z）；
+- 输出：`TOTK_build/analysis/save-map/save-marker-map.json`
+  （`categories` 为 hash→markerId，`details` 带名字/坐标/距离）。
+- 规模与验证：
+
+| 类别 | 生成数量 | 验证 |
+|---|---|---|
+| 神庙发现 / 状态 | 152 / 152 | `0x5F6180D7`→乌克乌候神庙（Dungeon060）、`0xDF539D50`→伊恩伊萨神庙（Dungeon062），坐标距离 0.0 |
+| 鸟望台 | 15 | `Tower01..15` 坐标匹配 |
+| 破魔之根 | 120 | `CheckPoint000..119`（MinusField） |
+| 龙之泪 | 12 | `DragonTears01..12` |
+| 洞窟入口 | 342（171 洞 ×2 种 key） | `IsVisitLocation.Cave_*` + `IsVisitLocationArea_CaveEntrance.<InstanceID>`；`0xE713E9E7`/`0x0E76344B`→池边的洞窟 |
+| 深穴 | 70（35×2） | `CaveEntranceSpecial`/`DeepHole_*` |
+| 井 | 116（58×2） | `CaveEntranceWell`/`Well_*` |
+
+未匹配 3 条（Well_0043B、DeepHole_Firone、Dungeon073），wiki 侧缺标记或坐标偏差 >60m，后续单独补。
+
+宝箱：RomFS 里没有 `TBox` 放置目录（`Banc/*/DungeonTreasureBox` 只覆盖神庙宝箱）。
+下一步需要找"野外宝箱放置数据"：候选是逐网格 `Bake/Scene` 的其他 DataElement 类型，或 objmap 的 object 数据；
+拿到 `InstanceGUID → 坐标` 后，存档 GUID 数组即可映射到 wiki 宝箱标记。
+
 ## 4. 已实现接口（游戏侧）
 
 - `GET /v1/save/state?slot=latest`：hash 表（非 0 项）+ GUID 数组 + 坐标 + 游戏内时间；

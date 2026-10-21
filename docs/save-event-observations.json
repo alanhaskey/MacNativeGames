@@ -385,6 +385,17 @@
         "battery-set"
       ],
       "note": "伊恩伊萨神庙 completion + battery. None of these equals the ten flags of shrine-1 completion, so completion flags are per-shrine too. 0x31AB5580 5->12 (a counter/bitfield)."
+    },
+    {
+      "at": "2026-10-21T21:44+08:00",
+      "event": "chest-7-arrows",
+      "saves": [
+        "slot_01@21:43:08",
+        "slot_02@21:44:31"
+      ],
+      "newFlags": [],
+      "item": "wooden-arrows-x5",
+      "note": "inconclusive: no new flag between the two saves (only position/time changed). Either the chest was opened before the 21:43 save (inside shrine-2's completion window) or this chest's state is not recorded as flags. needs a clean retest: manual save, open chest, manual save, report both times."
     }
   ],
   "findings": {
@@ -423,6 +434,7 @@
     "shrineCompletion": "shrine-1 completion: ten flags; shrine-2 completion: seven flags, no overlap. Both discovery and completion are per-shrine; the battery reward may add its own flags inside the same delta."
   },
   "openQuestions": [
+    "chest-7: confirm whether it was inside shrine-2 / already opened, then do a clean save->open->save test",
     "a clean ordinary chest test (save immediately before/after) to see the minimal chest group",
     "which of the six keys in the first-korok window belongs to the korok itself?",
     "bubbul gems, caves, side adventures, other game versions"

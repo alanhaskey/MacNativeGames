@@ -21,7 +21,14 @@
         "slot_03@20:35:03",
         "slot_00@20:35:45"
       ],
-      "newFlags": [],
+      "newFlags": [
+        "0x097D51E8",
+        "0x3BAFD364",
+        "0x5BA15424",
+        "0xB2F9F270",
+        "0xEDB8F83E",
+        "0xFB564E95"
+      ],
       "counter": {
         "before": 17,
         "after": 18
@@ -31,7 +38,7 @@
         1554.9,
         822.5
       ],
-      "note": "no per-object flag; footprint.sav changed 23 bytes, caption.sav 9.6 KB"
+      "note": "six persistent flags appeared in the 20:35:45->20:37:20 window; at least one is this Korok, the others look like first-time UI/save flags (they stay 1 in every later save)"
     },
     {
       "at": "2026-10-21T20:40+08:00",
@@ -201,22 +208,43 @@
         1521.4,
         974.3
       ]
+    },
+    {
+      "at": "2026-10-21T21:14+08:00",
+      "event": "korok-completed-2",
+      "saves": [
+        "slot_00@21:14:44",
+        "slot_02@21:14:58"
+      ],
+      "newFlags": [
+        "0xB33C6725"
+      ],
+      "counter": {
+        "before": 6,
+        "after": 6
+      },
+      "position": [
+        111.89,
+        1523.13,
+        1081.48
+      ],
+      "note": "single new flag: koroks do have a per-object flag; the earlier 'no flag' was a diff-window attribution error"
     }
   ],
   "findings": {
     "eventModel": "an in-game event sets a group of opaque 32-bit flag keys; no flag name or object id is needed to detect it",
     "perObject": "chest-1 {0x1BED068D,0x1F23D973,0xAD3CBF08} and chest-2 {0xDBEA8E06,0xF9525C48} do not overlap",
-    "korok": "no flag observed; only the counter 0x449B3BA6 increments",
+    "korok": "korok #2 sets exactly one persistent flag 0xB33C6725; the first korok window also contained five first-time UI/save flags that persist, which is why it looked flagless",
     "counter0x449B3BA6": "values run 16..23 then wrap to 0..4 across saves, so it is not an event counter; most likely an in-game hour (0-23) or another time-like field. Earlier 'increments on event X' observations were time passing.",
     "hashMapping": "CRC32/CRC32C/Murmur3-32/FNV-1a over 3373 GameDataList names and 666 wiki source_ids do not produce the observed keys",
     "position": "the save carries the player position (tag 0xC884818D), so no memory read is needed for the binding step",
-    "chestGroups": "chest-1 {0x1BED068D,0x1F23D973,0xAD3CBF08} (3), chest-2 {0xDBEA8E06,0xF9525C48} (2), chest-3 {0x1932FAB1,0x2D048130,0x736B8EC3,0x8F4849A7} (4): all disjoint, group size varies; bind the whole group."
+    "chestGroups": "chest-1 {0x1BED068D,0x1F23D973,0xAD3CBF08} (3), chest-2 {0xDBEA8E06,0xF9525C48} (2), chest-3 {0x1932FAB1,0x2D048130,0x736B8EC3,0x8F4849A7} (4): all disjoint, group size varies; bind the whole group.",
+    "firstTimeFlags": "some flags are first-time UI/save flags (set once, stay 1): a group can contain more keys than the object needs; bind groups but keep an 'unexpected group size' review state"
   },
   "openQuestions": [
+    "which of the six keys in the first-korok window belongs to the korok itself?",
     "confirm 0x449B3BA6 is the in-game hour (read the HUD clock at a save point)",
-    "korok has no flag and no event counter: find its signal (inventory seed count? footprint.sav?)",
     "does a second shrine completion produce a different ten-key group?",
-    "which keys, if any, are generic versus per-object (more chests and shrines)",
     "bubbul gems, caves, side adventures, other game versions"
   ]
 }

@@ -212,10 +212,12 @@
 
 ## 6.6 收集同步的消费方式（wiki 侧）
 
-1. 加载 `save-marker-map.compact.json`：`categories: {类别: {存档 key: wiki markerId}}`；
+1. 加载 `save-marker-map.compact.json`：
+   `categories: {类别: {kind: "flag"|"guid", value: 1|"Clear", map: {存档 key: wiki markerId}}}`；
 2. 轮询 `GET /v1/save/state?slot=latest`：
-   - `flags`（`"0x%08X" -> value`）：对神庙/塔/树根/龙之泪/洞窟/深穴/井/克洛格/旅行克洛格，
-     命中即完成；神庙 Clear 的值为 `hash('Clear') = 0x4C0A63F4`；
+   - `flags`（`"0x%08X" -> value`）：`kind == "flag"` 的类别，**值等于 `value`** 才算完成
+     （`value: 1` 或 `"Clear"`；`"Clear"` = `hash('Clear') = 0x4C0A63F4`）。只"存在"不算；
+     例如旅行克洛格/神庙状态在其他阶段也有非零值；
    - `guids`（`"0x%016X"`）：命中宝箱/魔犹伊/卡邦达/贤者遗志的 GUID 即完成；
 3. 需要"刚完成"的实时事件时用 `GET /v1/save/delta?since=<seq>`（间隔长/组大时进人工确认）；
 4. 未在映射表里的 key 可以忽略（例如成就类旗帜）；不要把位置/时间字段当事件。

@@ -312,6 +312,24 @@ def main():
                 continue
             add('sage_wills', guid_key(guid), marker, 'sage_will', name, position, distance)
 
+    # How a consumer decides "done" for each category.
+    expectations = {
+        'shrines_found': {'kind': 'flag', 'value': 1},
+        'shrines_status': {'kind': 'flag', 'value': 'Clear'},
+        'towers': {'kind': 'flag', 'value': 1},
+        'lightroots': {'kind': 'flag', 'value': 1},
+        'dragon_tears': {'kind': 'flag', 'value': 1},
+        'caves': {'kind': 'flag', 'value': 1},
+        'chasms': {'kind': 'flag', 'value': 1},
+        'wells': {'kind': 'flag', 'value': 1},
+        'koroks': {'kind': 'flag', 'value': 1},
+        'travel_koroks': {'kind': 'flag', 'value': 'Clear'},
+        'chests': {'kind': 'guid'},
+        'bubbuls': {'kind': 'guid'},
+        'addison': {'kind': 'guid'},
+        'sage_wills': {'kind': 'guid'},
+    }
+
     report = {
         'schema': 'macnativegames.save-map/1',
         'game': 'totk',
@@ -334,7 +352,10 @@ def main():
         'game': report['game'],
         'source': report['source'],
         'counts': report['counts'],
-        'categories': categories,
+        'categories': {name: {'kind': expectations.get(name, {}).get('kind', 'flag'),
+                              'value': expectations.get(name, {}).get('value', 1),
+                              'map': values}
+                       for name, values in categories.items()},
     }
     compact_path = out_path.with_name(out_path.stem + '.compact.json')
     compact_path.write_text(json.dumps(compact, ensure_ascii=False, separators=(',', ':')) + '\n')

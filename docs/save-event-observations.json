@@ -229,6 +229,23 @@
         1081.48
       ],
       "note": "single new flag: koroks do have a per-object flag; the earlier 'no flag' was a diff-window attribution error"
+    },
+    {
+      "at": "2026-10-21T21:19+08:00",
+      "event": "chest-4-attempt",
+      "saves": [
+        "slot_00@21:18:33",
+        "slot_04@21:19:42"
+      ],
+      "newFlags": [],
+      "counter": {
+        "hour": 8,
+        "minute": [
+          0,
+          5
+        ]
+      },
+      "note": "ambiguous: the two saves the player named (8:00 -> 8:05) show no new flag; thirteen flags appeared in the previous window 21:17:05 -> 21:18:33, so the chest may have been opened before the 21:18 save (or those were first-time flags). needs a clean re-test."
     }
   ],
   "findings": {
@@ -239,11 +256,31 @@
     "hashMapping": "CRC32/CRC32C/Murmur3-32/FNV-1a over 3373 GameDataList names and 666 wiki source_ids do not produce the observed keys",
     "position": "the save carries the player position (tag 0xC884818D), so no memory read is needed for the binding step",
     "chestGroups": "chest-1 {0x1BED068D,0x1F23D973,0xAD3CBF08} (3), chest-2 {0xDBEA8E06,0xF9525C48} (2), chest-3 {0x1932FAB1,0x2D048130,0x736B8EC3,0x8F4849A7} (4): all disjoint, group size varies; bind the whole group.",
-    "firstTimeFlags": "some flags are first-time UI/save flags (set once, stay 1): a group can contain more keys than the object needs; bind groups but keep an 'unexpected group size' review state"
+    "firstTimeFlags": "some flags are first-time UI/save flags (set once, stay 1): a group can contain more keys than the object needs; bind groups but keep an 'unexpected group size' review state",
+    "timeOfDay": {
+      "hourKey": "0x449B3BA6",
+      "minuteKey": "0x2106FA19",
+      "verified": true,
+      "samples": [
+        {
+          "at": "2026-10-21T21:18:33+08:00",
+          "inGame": "08:00",
+          "hour": 8,
+          "minute": 0
+        },
+        {
+          "at": "2026-10-21T21:19:42+08:00",
+          "inGame": "08:05",
+          "hour": 8,
+          "minute": 5
+        }
+      ],
+      "note": "the player reported the in-game clock at both saves; hour 0x449B3BA6 and minute 0x2106FA19 match exactly"
+    }
   },
   "openQuestions": [
+    "clean chest re-test: manual save immediately before and after the chest, with exact save times",
     "which of the six keys in the first-korok window belongs to the korok itself?",
-    "confirm 0x449B3BA6 is the in-game hour (read the HUD clock at a save point)",
     "does a second shrine completion produce a different ten-key group?",
     "bubbul gems, caves, side adventures, other game versions"
   ]

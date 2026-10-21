@@ -6,7 +6,7 @@ keys for shrines, towers, lightroots, dragon tears, caves, chasms and wells, and
 wiki markers (data/content/map-content.json) by coordinates.  The wiki stores game_z negated
 relative to the RomFS/save Z.
 
-Usage: build_save_marker_map.py <romfs-dir> <wiki-map-content.json> <out.json>
+Usage: build_save_marker_map.py <romfs-dir> <wiki-map-content.json> <out.json> [reference-hashes.js]
 """
 import json
 import re
@@ -98,6 +98,36 @@ def nearest(markers, x, z, maximum=60.0):
         if distance < best_distance:
             best, best_distance = marker, distance
     return best, best_distance
+
+
+ACTOR_UNIT_SUFFIXES = ('_Static.bcett.byml.zs', '_Dynamic.bcett.byml.zs')
+ACTOR_CATEGORIES = (
+    # (category, predicate, wiki subtype, key kind)
+    ('chests', lambda name: name.startswith('TBox_Field') or name.startswith('TBox_Dungeon'), '宝箱', 'guid'),
+    ('bubbuls', lambda name: name in ('Enemy_CaveMaster_000', 'Enemy_CaveMaster_Middle', 'Enemy_CaveMaster_Senior'), '魔犹伊', 'guid'),
+    ('addison', lambda name: name == 'Npc_CraftSignboard001', '卡邦达', 'guid'),
+)
+
+
+def scan_actors(romfs):
+    """Yield (guid, gyaml, (x, y, z), unit path) for every actor in the map unit files."""
+    paths = [p for p in romfs.index if p.startswith('Banc/') and p.endswith(ACTOR_UNIT_SUFFIXES)]
+    for path in paths:
+        try:
+            root = Byaml(romfs.decompress(romfs.read(path))).root()
+        except Exception:
+            continue
+        for actor in (root.get('Actors') or []):
+            guid = actor.get('Hash')
+            name = (actor.get('Gyaml') or '').rstrip('\x00')
+            translate = actor.get('Translate')
+            if not isinstance(guid, int) or not isinstance(translate, list) or len(translate) != 3:
+                continue
+            yield guid, name, translate, path
+
+
+def guid_key(value):
+    return '0x%016X' % value
 
 
 def main():
@@ -212,6 +242,76 @@ def main():
                 else:
                     unmatched.append({'category': target, 'entry': row['name'], 'instances': row['ids'], 'keys': keys, 'pos': row['pos']})
 
+    # Koroks and travel koroks: the save keys are hash('IsAppearKorok.' + InstanceID) and
+    # hash('KorokCarryProgress.' + InstanceID); the placement file gives InstanceID -> coordinates.
+    korok_location = 'Banc/MainField/HiddenKorok/MainField.hiddenkorok.byml.zs'
+    if korok_location in romfs.index:
+        korok_root = Byaml(romfs.decompress(romfs.read(korok_location))).root()
+        # Hidden koroks: coordinates match the wiki markers exactly (z negated on the wiki side).
+        categories['koroks'] = {}
+        details['koroks'] = {}
+        for instance, position in (korok_root.get('HiddenKorok') or {}).items():
+            marker, distance = nearest(by_subtype('隐藏克洛格'), position[0], position[2])
+            if marker is None:
+                unmatched.append({'category': 'koroks', 'instance': instance, 'pos': position})
+                continue
+            add('koroks', hash_key('IsAppearKorok.' + instance), marker, 'korok', instance, position, distance)
+        # Travel koroks: the wiki markers sit at the delivery point, not the carry start, so pair by order
+        # (the placement dict order equals the game's internal order; the wiki numbers Korok0000..Korok0099).
+        travel_markers = sorted(by_subtype('旅行克洛格'),
+                                key=lambda m: int((m.get('source_id') or 'Korok0').split('Korok')[-1]))
+        categories['travel_koroks'] = {}
+        details['travel_koroks'] = {}
+        for index, (instance, position) in enumerate((korok_root.get('CarryKorok') or {}).items()):
+            if index >= len(travel_markers):
+                unmatched.append({'category': 'travel_koroks', 'instance': instance, 'pos': position})
+                continue
+            marker = travel_markers[index]
+            add('travel_koroks', hash_key('KorokCarryProgress.' + instance), marker, 'travel_korok',
+                instance, position, -1.0)
+
+    # Sage wills: the save stores GUIDs (decimal strings in the reference table).
+    # Optional reference table (community project, used only for the "which chest GUIDs hold a sage's will"
+    # list). Pass it as the 4th argument; without it the sage_wills category is skipped.
+    will_path = Path(sys.argv[4]) if len(sys.argv) > 4 else Path('/tmp/totkmap-ref/app/data/totk_save_hashes.js')
+    will_guids = set()
+    if will_path.exists():
+        import re as _re
+        match = _re.search(r'SAGE_WILLS_FOUND:\s*\[(.*?)\n\t\]', will_path.read_text(), _re.S)
+        if match:
+            will_guids = {int(x) for x in _re.findall(r"'([0-9]{10,})'", match.group(1))}
+
+    # GUID-keyed actor categories (chests, bubbuls, Addison signs): the save stores the actor
+    # instance GUID in its GUID array; the placement files carry Hash -> Translate.
+    actor_lists = {category: [] for category, _, _, _ in ACTOR_CATEGORIES}
+    for guid, name, position, unit in scan_actors(romfs):
+        for category, predicate, _, _ in ACTOR_CATEGORIES:
+            if predicate(name):
+                actor_lists[category].append((guid, name, position, unit))
+    for category, predicate, subtype, key_kind in ACTOR_CATEGORIES:
+        pool = by_subtype(subtype)
+        categories[category] = {}
+        details[category] = {}
+        for guid, name, position, unit in actor_lists[category]:
+            marker, distance = nearest(pool, position[0], position[2])
+            if marker is None:
+                unmatched.append({'category': category, 'entry': name, 'pos': position, 'unit': unit})
+                continue
+            add(category, guid_key(guid), marker, category, name, position, distance)
+
+    if will_guids:
+        pool = by_subtype('贤者的遗志')
+        categories['sage_wills'] = {}
+        details['sage_wills'] = {}
+        for guid, name, position, unit in scan_actors(romfs):
+            if guid not in will_guids:
+                continue
+            marker, distance = nearest(pool, position[0], position[2])
+            if marker is None:
+                unmatched.append({'category': 'sage_wills', 'entry': name, 'pos': position, 'unit': unit})
+                continue
+            add('sage_wills', guid_key(guid), marker, 'sage_will', name, position, distance)
+
     report = {
         'schema': 'macnativegames.save-map/1',
         'game': 'totk',
@@ -229,6 +329,16 @@ def main():
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
+    compact = {
+        'schema': report['schema'],
+        'game': report['game'],
+        'source': report['source'],
+        'counts': report['counts'],
+        'categories': categories,
+    }
+    compact_path = out_path.with_name(out_path.stem + '.compact.json')
+    compact_path.write_text(json.dumps(compact, ensure_ascii=False, separators=(',', ':')) + '\n')
+    print('compact:', compact_path, compact_path.stat().st_size, 'bytes')
     print(json.dumps({k: report['counts'][k] for k in categories}, indent=1))
     print('unmatched:', len(unmatched), '->', out_path)
 

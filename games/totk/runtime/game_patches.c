@@ -1,6 +1,7 @@
 #include "game_patches.h"
 #include "aspect_patch.h"
 #include "game_version.h"
+#include "maplink.h"
 #include "world_survey.h"
 #include <TargetConditionals.h>
 #include <stdio.h>
@@ -552,6 +553,7 @@ static void patch_slowmo_bounce(Module *m) {
 
 void runtime_game_patches(Module *m) {
     runtime_survey_init(m);
+    runtime_maplink_init(m);
     const size_t n = sizeof fps60_sites / sizeof fps60_sites[0];
     if (strcmp(m->name, "main")) runtime_fail("game patches expect the main module");
     if (CODE_PATCHED_AT_BUILD) {

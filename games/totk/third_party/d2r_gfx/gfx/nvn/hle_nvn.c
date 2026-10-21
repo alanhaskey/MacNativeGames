@@ -580,6 +580,7 @@ static uint64_t g_game_sys;
 extern _Atomic int runtime_survey_pending;
 extern void runtime_survey_tick(uint64_t frame);
 extern const int32_t runtime_survey_sync[2];
+extern void runtime_maplink_frame(uint64_t frame);   /* read-only player position file (runtime/maplink.c); no-op unless enabled */
 /* TOTK_SURVEY_DEBUG=1: while a command is pending, the first 6 waited syncs, their thread and guest call chain, and where the
    system object holds them (pointer at sys+o, or inside / pointed to from the object at *(sys+o)). */
 static int vm_read8(uint64_t a, uint64_t *out);
@@ -2810,6 +2811,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
           if (ms) LOG("[nvn] 首次进局等管线预热 %d ms（本帧绘制 %llu）", ms, (unsigned long long)this_draws);
       } }
     present_cfg(o);
+    runtime_maplink_frame(g_frame);   /* read-only map link; a load and a compare when no file is enabled */
     uint64_t t0 = now_ns();
     if (async_replay()) {   // TOTK: the present (and the replay frame number below) run on the translation thread, after this frame's submits
         xjob j = {.kind = XJ_PRESENT, .win = o, .idx = idx, .period = present_period(o) / 1e9};

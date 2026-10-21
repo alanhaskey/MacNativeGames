@@ -249,6 +249,11 @@ int main(int argc, char **argv) {
         { NSString *cmds = env_or("TOTK_INPUT_FILE", [data stringByAppendingPathComponent:@"input.txt"]);
           FILE *cf = fopen(cmds.fileSystemRepresentation, "w"); if (cf) fclose(cf);
           setenv("TOTK_INPUT_FILE", cmds.fileSystemRepresentation, 1); }
+        /* Read-only map link (runtime/maplink.c): the player's position for an external interactive map, written into the
+           data folder a few times a second. TOTK_MAPLINK=0 turns it off; TOTK_MAPLINK_FILE= empty is not enough because
+           the default below is what makes the file path known to the game. */
+        { NSString *maplink = env_or("TOTK_MAPLINK_FILE", [data stringByAppendingPathComponent:@"maplink.json"]);
+          setenv("TOTK_MAPLINK_FILE", maplink.fileSystemRepresentation, 1); }
 
         NSString *log = [logs stringByAppendingPathComponent:@GAME_LOG ".log"];
         [NSFileManager.defaultManager removeItemAtPath:[logs stringByAppendingPathComponent:@GAME_LOG ".previous.log"] error:nil];

@@ -1,0 +1,87 @@
+/* Read-only map link: write the player's world position to a small JSON file so an external interactive map can follow
+   the player in real time (TOTK 1.0.0 / 1.1.2 / 1.2.1 / 1.4.3, Mac; BotW has no player actor layout here and reports
+   nothing). The position comes from the same verified actor lookup the survey uses (world_survey.c, read-only), sampled
+   on the present path after a frame is submitted, and written with rename() so a reader never sees a half-written file.
+
+   The file is off unless TOTK_MAPLINK_FILE names it (the launcher sets it to <game data>/maplink.json). TOTK_MAPLINK=0
+   disables it. TOTK_MAPLINK_FRAME_STEP sets the sample period in frames (default 6, i.e. 10 Hz at 60 fps).
+
+   {"schema":"macnativegames.maplink/1","ok":true,"game":"totk","version":"1.4.3","frame":N,"t":<unix ms>,
+    "x":..,"y":..,"z":..,"yaw":<degrees, 0 = +Z, 90 = +X>,"rot":[9 floats],"layer":null}
+
+   With no player (title screen, loading, menus) the file carries ok=false and no position. Nothing here changes the
+   game, and no failure of this file can stop it. */
+#include "maplink.h"
+#include "world_survey.h"
+#include "game_version.h"
+#include <limits.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#ifdef GAME_BOTW
+void runtime_maplink_init(Module *m) { (void)m; }
+void runtime_maplink_frame(uint64_t frame) { (void)frame; }
+#else
+static char path[PATH_MAX];
+static int enabled, step = 6;
+static uint64_t next_frame;
+
+void runtime_maplink_init(Module *m) {
+    (void)m;
+    const char *off = getenv("TOTK_MAPLINK");
+    if (off && (!strcmp(off, "0") || !strcmp(off, "off"))) return;
+    const char *p = getenv("TOTK_MAPLINK_FILE");
+    if (!p || !*p || strlen(p) >= sizeof path) return;
+    strcpy(path, p);
+    const char *s = getenv("TOTK_MAPLINK_FRAME_STEP");
+    if (s) { int v = atoi(s); if (v >= 1 && v <= 600) step = v; }
+    enabled = 1;
+    fprintf(stderr, "[maplink] position file %s, one sample every %d frames\n", path, step);
+}
+
+static long long wall_ms(void) {
+    struct timespec ts;
+    return clock_gettime(CLOCK_REALTIME, &ts) == 0 ? (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000 : 0;
+}
+
+static void write_json(const char *json) {
+    char temporary[PATH_MAX + 8];
+    if (snprintf(temporary, sizeof temporary, "%s.tmp", path) >= (int)sizeof temporary) return;
+    FILE *f = fopen(temporary, "w");
+    if (!f) return;
+    int ok = fputs(json, f) >= 0;
+    if (fclose(f) != 0) ok = 0;
+    if (ok) rename(temporary, path);
+    else remove(temporary);
+}
+
+void runtime_maplink_frame(uint64_t frame) {
+    if (!enabled || frame < next_frame) return;
+    next_frame = frame + (uint64_t)step;
+    char json[640];
+    long long t = wall_ms();
+    float xyz[3], rot[9];
+    if (runtime_survey_player(xyz, rot)) {
+        /* Actor rotation is a row-major 3x3; local forward +Z becomes the third column, so the world heading is
+           atan2(forward.x, forward.z). Degrees, clockwise from +Z, which is what a north-up map wants. */
+        double yaw = atan2((double)rot[2], (double)rot[8]) * 180.0 / M_PI;
+        if (yaw < 0) yaw += 360.0;
+        snprintf(json, sizeof json,
+                 "{\"schema\":\"macnativegames.maplink/1\",\"ok\":true,\"game\":\"totk\",\"version\":\"%s\","
+                 "\"frame\":%llu,\"t\":%lld,\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,\"yaw\":%.1f,"
+                 "\"rot\":[%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f],\"layer\":null}\n",
+                 TOTK_GAME_VERSION, (unsigned long long)frame, t,
+                 xyz[0], xyz[1], xyz[2], yaw,
+                 rot[0], rot[1], rot[2], rot[3], rot[4], rot[5], rot[6], rot[7], rot[8]);
+    } else {
+        snprintf(json, sizeof json,
+                 "{\"schema\":\"macnativegames.maplink/1\",\"ok\":false,\"game\":\"totk\",\"version\":\"%s\","
+                 "\"frame\":%llu,\"t\":%lld}\n",
+                 TOTK_GAME_VERSION, (unsigned long long)frame, t);
+    }
+    write_json(json);
+}
+#endif

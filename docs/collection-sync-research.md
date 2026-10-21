@@ -86,14 +86,21 @@ wiki 的标记数据（objmap 导入）已经带有：`sourceId`（objmap 对象
 
 ## 5. 下一步实验（高信息量、低成本）
 
-已新增只读工具 `games/totk/scripts/diag/save_table_diff.py`：
+已新增两个只读工具：
+
+- `games/totk/scripts/diag/save_table_diff.py`：dump / diff 存档哈希表；
+- `games/totk/scripts/diag/collection_probe.py`：**一键快照 + 对比**（推荐用这个）：
 
 ```sh
-# 列出表
-python3 games/totk/scripts/diag/save_table_diff.py --dump <progress.sav> --limit 40
-# 对比两份存档
-python3 games/totk/scripts/diag/save_table_diff.py A.sav B.sav --limit 40
+python3 games/totk/scripts/diag/collection_probe.py snapshot --label baseline   # 动作前
+# 游戏里只做一个动作，然后手动存档
+python3 games/totk/scripts/diag/collection_probe.py after --label after        # 自动快照并对比上一次
+python3 games/totk/scripts/diag/collection_probe.py list
 ```
+
+快照保存在 `~/Library/Application Support/MacNativeGames/TOTK/collection-probes/`，
+同时记录存档时间、槽位、sha256 和当时的玩家坐标（游戏在跑时从 `maplink.json` 读取）。
+`diff` 会把每个变化的 key 解成 `int` / `float32` / `flag` 三种视图，方便认出坐标或计数。
 
 **对照实验步骤**（建议在存档副本上做，或先备份整个 profile）：
 

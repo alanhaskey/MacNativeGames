@@ -3,7 +3,7 @@
 > 这份文档是**游戏侧对外的唯一接口约定**。登录、账号、上传、地图 UI、连接器等都在外部（wiki 侧 agent）实现，
 > 游戏侧只负责产生信息、并（对少数受控操作）接收命令。
 >
-> 当前实现状态：**位置域 v1 已实现**；存档、轨迹、传送为**已定义、未实现**的规划接口。文档里的"planned"
+> 当前实现状态：**位置、轨迹、存档摘要 v1 已实现**；传送（控制域）与存档增强为规划接口。文档里的"planned"
 > 都是契约，不是承诺时间。
 
 ## 0. 范围与职责
@@ -79,7 +79,7 @@
 }
 ```
 
-> 0.x 阶段的 `capabilities` 是布尔值的旧形式（`trail/layer/reverse`）；实现新域时改成上表的对象形式，同时保留旧字段一个版本。
+> 能力位现在是对象形式（`available` / `summary` / `slots` / `fields`），外部程序按它决定显示哪些入口；未知能力一律忽略。
 
 ## 4. 通用约定
 
@@ -142,7 +142,7 @@
 
 详细语义见 [docs/maplink.md](maplink.md)（生产者）与 [docs/maplink-interfaces.md](maplink-interfaces.md)（网关与状态细节）。
 
-## 6. 存档域（save v1，planned）
+## 6. 存档域（save v1，已实现：位置/savedAt/槽位）
 
 **用途**：给外部程序提供"最近一次存档的摘要"，不实时、不读实时内存。
 
@@ -163,18 +163,20 @@
 
 | 端点 | 返回 |
 |---|---|
-| `GET /v1/save/slots` | `{ "slots": [ { "slot": "1", "savedAt": "...", "playtimeSeconds": 7320 } ] }` |
-| `GET /v1/save/summary?slot=latest` | 上面的 `save-summary.json` |
+| `GET /v1/save/slots` | `{ "slots": [ { "slot": "00", "savedAt": "...", "size": 2307856 } ] }`（按修改时间倒序） |
+| `GET /v1/save/summary?slot=latest` | `{ "ok":true, "slot":"00", "savedAt":"...", "player":{x,y,z}, "optional":{...null} }` |
 | `GET /v1/save/raw?slot=latest` | **不提供**（不暴露原始存档，避免误用/隐私风险） |
 
 规则：
 
-- 只读；`savedAt` 是唯一新鲜度依据；`ok:false` 表示没有可读存档。
+- 已实测 1.4.3：`progress.sav` 2,307,856 字节，按标签哈希扫描位置（`0xC884818D` / `0x8773F02D`），不依赖文件大小白名单。
+- 只读；`savedAt` 取文件 mtime；`ok:false` 表示没有可读存档；写入中返回 409 `bad-state`。
+- 解析按 (路径, mtime, size) 缓存，避免重复读 2.3 MB。
 - 存档格式随游戏版本变化；`version` 字段用于消费者提示不兼容。
 - 隐私：摘要只含玩家自己的数据；网关只允许本机读取。
 - 失败：存档正在写入时返回 409 `bad-state`（不要读半写文件）。
 
-## 7. 轨迹域（trail v1，planned）
+## 7. 轨迹域（trail v1，已实现）
 
 **用途**：在地图上画最近一段路径。**不持久化、不上传**，由网关在内存里累积（重启即清空）。
 
@@ -283,9 +285,9 @@ POST /v1/control/ping       {}  → { "pong": true, "frame": 123456 }
 | 域 | 能力 | 状态 | 备注 |
 |---|---|---|---|
 | position | 内置网关（随游戏启动）+ state/stream/health + 发现文件 | **已实现** | 1.4.3 实测；10 Hz；含 inWorld；无 Python、无额外进程 |
-| meta | 能力协商 | **已实现**（旧布尔形式） | 新域上线时改对象形式 |
-| save | summary/slots | planned | 先做位置/时长/心/耐力/卢比 |
-| trail | 内存缓冲 | planned | 网关侧实现，游戏零改动 |
+| meta | 能力协商 | **已实现**（对象形式） | trail/save 能力位已在其中 |
+| save | summary/slots | **已实现** | 位置/savedAt/槽位；心/耐力/卢比仍为 null（planned） |
+| trail | 内存缓冲 | **已实现** | 网关内存 2 Hz、10 分钟、重启即清 |
 | control | teleport/waypoint/ping | planned | 默认关闭，token + 备份 |
 | world/inventory/progress | — | reserved | 按需 |
 

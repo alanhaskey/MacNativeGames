@@ -395,7 +395,13 @@
       ],
       "newFlags": [],
       "item": "wooden-arrows-x5",
-      "note": "inconclusive: no new flag between the two saves (only position/time changed). Either the chest was opened before the 21:43 save (inside shrine-2's completion window) or this chest's state is not recorded as flags. needs a clean retest: manual save, open chest, manual save, report both times."
+      "note": "no table flag; a whole-file diff shows an opaque data blob (0x0D95xx) changed by about 700 bytes. Chest state is therefore in the data section, while the earlier chest 'flag groups' were auxiliary achievements (which is why their size varied).",
+      "dataChanges": {
+        "totalBytes": 876,
+        "tableBytes": 15,
+        "blobRegion": "0x0D9560-0x0D9868 (about 700 bytes)",
+        "note": "byte-level diff; the real chest state appears to live in this opaque blob"
+      }
     }
   ],
   "findings": {
@@ -431,11 +437,12 @@
     "windowLength": "the delta can only be as clean as the save interval: korok #2 had 14 s between saves and yielded exactly one flag; the travel korok had 7.5 min and yielded nine, mixing events. The bridge must expose the interval/savedAt and the consumer should treat long windows as multi-event (review queue).",
     "shrineDiscovery": "shrine-1 discovery flag 0x5F6180D7; shrine-2 discovery produced six flags, none equal to it: discovery flags are per-shrine, and the group can include first-time flags",
     "counters": "0x161D8560 increments when a shrine is activated (1->2), and 0x16D9641D / 0x63866C56 / 0x9DD69D5F / 0xC41B7240 also increment on discovery - these are counters, not per-object flags",
-    "shrineCompletion": "shrine-1 completion: ten flags; shrine-2 completion: seven flags, no overlap. Both discovery and completion are per-shrine; the battery reward may add its own flags inside the same delta."
+    "shrineCompletion": "shrine-1 completion: ten flags; shrine-2 completion: seven flags, no overlap. Both discovery and completion are per-shrine; the battery reward may add its own flags inside the same delta.",
+    "dataBlob": "progress.sav contains opaque state blobs; 0x0D9510.. is a list of 8-byte hashes that changes at chest/korok/shrine events and grew at each chest. These 64-bit values do not match the wiki marker source_ids (tested little and big endian). Detecting an event is possible; enumerating which chest is open requires decoding this structure."
   },
   "openQuestions": [
-    "chest-7: confirm whether it was inside shrine-2 / already opened, then do a clean save->open->save test",
-    "a clean ordinary chest test (save immediately before/after) to see the minimal chest group",
+    "decode the 8-byte-ID blob (0x0D9510..) to enumerate opened chests and other object states",
+    "a clean ordinary chest test to separate blob writes from achievement flags",
     "which of the six keys in the first-korok window belongs to the korok itself?",
     "bubbul gems, caves, side adventures, other game versions"
   ]

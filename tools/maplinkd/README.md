@@ -1,4 +1,9 @@
-# maplinkd — local HTTP/SSE bridge for the map link
+# maplinkd — local HTTP/SSE bridge for the map link (development / reference implementation)
+
+> **Players do not need this.** The game app now serves the same contract itself from inside the game process
+> (`games/totk/runtime/gateway.c`): it starts with the game, writes `<data>/gateway.json`, and stops with the game.
+> This Python bridge is kept for fixtures, tests and tools that run without the game. If the game is running, it owns
+> 17862 first; pass `--port` to run this bridge next to it.
 
 The game writes the player's position to `~/Library/Application Support/MacNativeGames/TOTK/maplink.json`
 (10 Hz, atomic replace; see [docs/maplink.md](../../docs/maplink.md)). `maplinkd` turns that file into one stable

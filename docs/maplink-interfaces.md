@@ -1,6 +1,8 @@
 # Map link interfaces — position domain detail (v1)
 
-> The master contract for **all** game-side data (position, save, trail, control) is
+> Since 2026-10-21 the gateway is **built into the game process** (`games/totk/runtime/gateway.c`) and starts with the
+> game; the Python `maplinkd` is the development/reference implementation (fixtures, tests, tools) and is not needed by
+> players. The master contract for **all** game-side data (position, save, trail, control) is
 > [docs/game-interface.md](game-interface.md). This file keeps the detailed position/bridge notes and the
 > implementation history of the local bridge.
 

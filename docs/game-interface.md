@@ -16,6 +16,10 @@
 
 游戏侧不实现、也不关心：账号、密码、token、HTTPS 上传、服务器地址、连接器 UI。外部消费者只需要 **本机 HTTP**。
 
+**服务随游戏启动**：网关是游戏进程内置的一个线程（原生 C，无 Python、无额外进程）。游戏启动即自动在回环地址提供接口，
+游戏退出即关闭；玩家不需要输入任何命令。实际地址写在 `<data>/gateway.json` 里，外部程序读它即可。
+发现文件在强制退出后可能残留，读取方必须先探活（见 §3）。
+
 ## 1. 设计原则
 
 1. **只读默认**：大部分接口只读取游戏状态；唯一的写操作（传送/标记）单独放在受控域，默认关闭、需要显式开启。
@@ -48,10 +52,13 @@
 
 | 项 | 值 |
 |---|---|
-| 网关地址 | `http://127.0.0.1:17862`（可用 `--port` 改） |
+| 网关地址 | 随游戏自动启动；默认 `http://127.0.0.1:17862`，被占用时依次试 17863…17871 |
+| 服务发现 | `<data>/gateway.json`：`{ "url", "port", "pid", "game", "version", "startedAt" }` |
+| 残留处理 | 游戏退出走 `_exit(0)`，发现文件**可能残留**。使用前先探活：`GET /v1/meta`（1 秒超时）或检查 `pid` 是否存活；失败一律按"游戏未运行"处理，并在下次启动时被覆盖 |
+| 关闭 | `TOTK_GATEWAY=0` 启动游戏 |
 | 生产者目录 | `~/Library/Application Support/MacNativeGames/TOTK/` |
 | 位置文件 | `maplink.json` |
-| 网关入口 | `GET /v1/meta`（版本、能力、游戏与采样率） |
+| 网关入口 | `GET /v1/meta`（版本、能力、游戏与采样率）；游戏未运行时无服务 |
 | 总体 API 版本 | `gameapi/1`（元数据字段 `api`） |
 
 `GET /v1/meta` 示例：
@@ -275,7 +282,7 @@ POST /v1/control/ping       {}  → { "pong": true, "frame": 123456 }
 
 | 域 | 能力 | 状态 | 备注 |
 |---|---|---|---|
-| position | 文件 + state/stream/health | **已实现** | 1.4.3 实测；10 Hz；含 inWorld |
+| position | 内置网关（随游戏启动）+ state/stream/health + 发现文件 | **已实现** | 1.4.3 实测；10 Hz；含 inWorld；无 Python、无额外进程 |
 | meta | 能力协商 | **已实现**（旧布尔形式） | 新域上线时改对象形式 |
 | save | summary/slots | planned | 先做位置/时长/心/耐力/卢比 |
 | trail | 内存缓冲 | planned | 网关侧实现，游戏零改动 |
@@ -284,7 +291,8 @@ POST /v1/control/ping       {}  → { "pong": true, "frame": 123456 }
 
 ## 13. 外部消费者接入清单（给 wiki 侧 agent）
 
-1. 启动 `maplinkd`（或在你的程序里读 `maplink.json`，但推荐网关）。
+1. 游戏运行后自动有服务：读 `<data>/gateway.json` 拿 URL（或默认 17862）；**不需要启动任何命令**。
+   若游戏没开、你又需要测试，可用开发桥 `tools/maplinkd/maplinkd.py` 读取文件。
 2. `GET /v1/meta`，记录 `api` 与 `capabilities`；缺哪个能力就不显示对应 UI。
 3. 位置：`GET /v1/stream`（SSE）或轮询 `/v1/state`；只信 `status`。
 4. 存档：`GET /v1/save/summary?slot=latest`，按 `savedAt` 显示"上次存档"。

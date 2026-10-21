@@ -3,6 +3,7 @@
 #include "aspect_patch.h"
 #include "game_patches.h"
 #include "game_version.h"
+#include "gateway.h"
 #include "maplink.h"
 #include "world_survey.h"
 #include <stdio.h>
@@ -261,6 +262,7 @@ static void patch_render_res(Module *m);
 void runtime_game_patches(Module *m) {
     runtime_survey_init(m);
     runtime_maplink_init(m);
+    runtime_gateway_start();
     if (strcmp(m->name, "main")) runtime_fail("1.4.3 game patches expect main");
     patch_realtime(m);
     patch_output_res(m);

@@ -12,6 +12,7 @@
    With no player (title screen, loading, menus) the file carries ok=false and no position. Nothing here changes the
    game, and no failure of this file can stop it. */
 #include "maplink.h"
+#include "gateway.h"
 #include "world_survey.h"
 #include "game_version.h"
 #include <limits.h>
@@ -90,6 +91,7 @@ void runtime_maplink_frame(uint64_t frame) {
                  "\"frame\":%llu,\"t\":%lld,\"inWorld\":%s}\n",
                  TOTK_GAME_VERSION, (unsigned long long)frame, t, in_world ? "true" : "false");
     }
+    runtime_gateway_publish(json, strlen(json));   /* served by the in-game gateway, no separate process */
     write_json(json);
 }
 #endif

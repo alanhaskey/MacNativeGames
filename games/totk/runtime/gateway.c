@@ -9,6 +9,8 @@
        GET /v1/trail?seconds=&max=        recent path (in-memory ring buffer, 2 Hz, 10 minutes)
        GET /v1/save/slots                 save slots (slot, savedAt, size)
        GET /v1/save/summary?slot=latest   last save position/time (read-only parse of progress.sav)
+       GET /v1/save/state?slot=latest     parsed save: flag table (hash->value), GUID array, position, game time
+       GET /v1/save/delta?since=<seq>     changes between consecutive saves (added/changed/removed flags, new GUIDs)
 
    Loopback only; TOTK_GATEWAY=0 disables it; TOTK_GATEWAY_PORT sets the first port tried (17862..17871, first free
    wins). The actual URL is published in <data>/gateway.json. See docs/game-interface.md and docs/next-features-plan.md. */
@@ -22,6 +24,7 @@
 #include <netinet/tcp.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -287,6 +290,329 @@ static int parse_save_position(const char *path, double xyz[3]) {
     return 0;
 }
 
+
+/* --- parsed save state (flags + GUIDs + position + game time) ------------------------------------------------ */
+typedef struct { unsigned hash, value; } SaveFlag;
+
+typedef struct {
+    int valid;
+    char path[PATH_MAX];
+    long long mtime, size;
+    SaveFlag *flags;
+    int flag_count;
+    unsigned long long *guids;
+    int guid_count;
+    double xyz[3];
+    int hour, minute;
+} SaveState;
+
+static SaveState gw_save;
+static pthread_mutex_t gw_save_lock = PTHREAD_MUTEX_INITIALIZER;
+#define GW_DELTA_RING 8
+static char *gw_delta[GW_DELTA_RING];
+static int gw_delta_first, gw_delta_count, gw_delta_seq;
+
+static int compare_flags(const void *a, const void *b) {
+    unsigned x = ((const SaveFlag *)a)->hash, y = ((const SaveFlag *)b)->hash;
+    return x < y ? -1 : x > y;
+}
+
+static unsigned read_u32(const unsigned char *p) {
+    return (unsigned)p[0] | ((unsigned)p[1] << 8) | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
+}
+
+/* 0: parsed, -1: not a save, -2: changed while reading. */
+static int parse_save_full(const char *path, long long mtime, long long size, SaveState *out) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    struct stat before, after;
+    if (fstat(fileno(f), &before) != 0 || (long long)before.st_size > GW_SAVE_READ_LIMIT) { fclose(f); return -1; }
+    unsigned char *data = malloc((size_t)before.st_size);
+    if (!data) { fclose(f); return -1; }
+    size_t got = fread(data, 1, (size_t)before.st_size, f);
+    fclose(f);
+    if (got != (size_t)before.st_size) { free(data); return -1; }
+    if (stat(path, &after) != 0 || after.st_size != before.st_size || after.st_mtime != before.st_mtime) { free(data); return -2; }
+    if (got < 0x30 || read_u32(data) != 0x01020304u) { free(data); return -1; }
+
+    memset(out, 0, sizeof *out);
+    snprintf(out->path, sizeof out->path, "%s", path);
+    out->mtime = mtime;
+    out->size = size;
+    out->flags = malloc((got / 8 + 1) * sizeof(SaveFlag));
+    if (!out->flags) { free(data); return -1; }
+
+    const unsigned POSITION_HASH = 0xC884818Du, WORLD_POSITION_HASH = 0x8773F02Du, END_HASH = 0xA3DB7114u;
+    const unsigned HOUR_HASH = 0x449B3BA6u, MINUTE_HASH = 0x2106FA19u;
+    unsigned guids_offset = 0;
+    int have_player = 0, have_world = 0;
+    for (size_t i = 0x28; i + 8 <= got; i += 8) {
+        unsigned tag = read_u32(data + i), value = read_u32(data + i + 4);
+        if (tag == END_HASH) { guids_offset = value; break; }
+        out->flags[out->flag_count].hash = tag;
+        out->flags[out->flag_count].value = value;
+        out->flag_count++;
+        if (tag == HOUR_HASH) out->hour = (int)value;
+        else if (tag == MINUTE_HASH) out->minute = (int)value;
+        else if ((tag == POSITION_HASH || tag == WORLD_POSITION_HASH) && value >= 0x10000 && (value & 3u) == 0 && (size_t)value + 12 <= got) {
+            float xyz3[3];
+            memcpy(xyz3, data + value, sizeof xyz3);
+            if (xyz3[0] == xyz3[0] && xyz3[1] == xyz3[1] && xyz3[2] == xyz3[2]) {
+                out->xyz[0] = xyz3[0]; out->xyz[1] = xyz3[1]; out->xyz[2] = xyz3[2];
+                if (tag == POSITION_HASH) have_player = 1; else have_world = 1;
+            }
+        }
+    }
+    (void)have_world;
+    if (!out->flag_count) { free(out->flags); out->flags = NULL; free(data); return -1; }
+
+    /* GUID array: 8-byte ids from guids_offset until a zero pair. */
+    if (guids_offset >= 0x10000 && guids_offset < got) {
+        int capacity = (int)((got - guids_offset) / 8 + 1);
+        out->guids = malloc((size_t)capacity * sizeof(unsigned long long));
+        if (out->guids) {
+            for (size_t i = guids_offset; i + 8 <= got && out->guid_count < capacity; i += 8) {
+                unsigned lo = read_u32(data + i), up = read_u32(data + i + 4);
+                if (lo == 0 && up == 0) break;
+                out->guids[out->guid_count++] = ((unsigned long long)up << 32) | lo;
+            }
+        }
+    }
+    (void)have_player;
+    free(data);
+    out->valid = 1;
+    return 0;
+}
+
+typedef struct { char *p; size_t len, cap; } JsonBuf;
+
+static int jb_reserve(JsonBuf *b, size_t extra) {
+    if (b->len + extra + 1 <= b->cap) return 1;
+    size_t cap = b->cap ? b->cap : 4096;
+    while (cap < b->len + extra + 1) cap *= 2;
+    char *p = realloc(b->p, cap);
+    if (!p) return 0;
+    b->p = p; b->cap = cap;
+    return 1;
+}
+
+static int jb_printf(JsonBuf *b, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    char temporary[512];
+    int n = vsnprintf(temporary, sizeof temporary, format, arguments);
+    va_end(arguments);
+    if (n < 0) return 0;
+    if ((size_t)n < sizeof temporary) {
+        if (!jb_reserve(b, (size_t)n)) return 0;
+        memcpy(b->p + b->len, temporary, (size_t)n);
+        b->len += (size_t)n;
+        b->p[b->len] = 0;
+        return 1;
+    }
+    if (!jb_reserve(b, (size_t)n)) return 0;
+    va_start(arguments, format);
+    vsnprintf(b->p + b->len, b->cap - b->len, format, arguments);
+    va_end(arguments);
+    b->len += (size_t)n;
+    return 1;
+}
+
+/* Changes between two parsed saves. Ownership of the returned string goes to the caller. */
+static char *build_delta_json(const SaveState *previous, const SaveState *current, int seq, const char *slot) {
+    SaveFlag *a = malloc((size_t)previous->flag_count * sizeof(SaveFlag));
+    SaveFlag *b = malloc((size_t)current->flag_count * sizeof(SaveFlag));
+    if (!a || !b) { free(a); free(b); return NULL; }
+    memcpy(a, previous->flags, (size_t)previous->flag_count * sizeof(SaveFlag));
+    memcpy(b, current->flags, (size_t)current->flag_count * sizeof(SaveFlag));
+    qsort(a, (size_t)previous->flag_count, sizeof(SaveFlag), compare_flags);
+    qsort(b, (size_t)current->flag_count, sizeof(SaveFlag), compare_flags);
+
+    int added = 0, changed = 0, removed = 0;
+    int i = 0, j = 0;
+    while (i < previous->flag_count || j < current->flag_count) {
+        if (j >= current->flag_count || (i < previous->flag_count && a[i].hash < b[j].hash)) {
+            if (a[i].value != 0) removed++;
+            i++;
+        } else if (i >= previous->flag_count || b[j].hash < a[i].hash) {
+            if (b[j].value != 0) added++;
+            j++;
+        } else {
+            if (a[i].value != b[j].value && (a[i].value != 0 || b[j].value != 0)) changed++;
+            i++; j++;
+        }
+    }
+    int new_guids = 0;
+    for (int g = 0; g < current->guid_count; g++) {
+        int seen = 0;
+        for (int h = 0; h < previous->guid_count; h++) if (previous->guids[h] == current->guids[g]) { seen = 1; break; }
+        if (!seen) new_guids++;
+    }
+
+    JsonBuf out = {0};
+    long long interval = current->mtime - previous->mtime;
+    if (!jb_printf(&out, "{\"schema\":\"macnativegames.progress/1\",\"ok\":true,\"seq\":%d,"
+                         "\"slot\":\"%s\",\"savedAtMs\":%lld,\"intervalMs\":%lld,"
+                         "\"position\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f},"
+                         "\"gameTime\":{\"hour\":%d,\"minute\":%d},\"added\":[",
+                  seq, slot, current->mtime, interval >= 0 ? interval : 0,
+                  current->xyz[0], current->xyz[1], current->xyz[2], current->hour, current->minute)) { free(a); free(b); free(out.p); return NULL; }
+    i = 0; j = 0; int emitted = 0;
+    while (i < previous->flag_count || j < current->flag_count) {
+        if (j >= current->flag_count || (i < previous->flag_count && a[i].hash < b[j].hash)) { i++; continue; }
+        if (i >= previous->flag_count || b[j].hash < a[i].hash) {
+            if (b[j].value != 0) {
+                jb_printf(&out, "%s{\"hash\":\"0x%08X\",\"value\":%u}", emitted++ ? "," : "", b[j].hash, b[j].value);
+            }
+            j++;
+        } else { i++; j++; }
+    }
+    jb_printf(&out, "],\"changed\":[");
+    i = 0; j = 0; emitted = 0;
+    while (i < previous->flag_count && j < current->flag_count) {
+        if (a[i].hash < b[j].hash) { i++; continue; }
+        if (b[j].hash < a[i].hash) { j++; continue; }
+        if (a[i].value != b[j].value && (a[i].value != 0 || b[j].value != 0)) {
+            jb_printf(&out, "%s{\"hash\":\"0x%08X\",\"from\":%u,\"to\":%u}", emitted++ ? "," : "", a[i].hash, a[i].value, b[j].value);
+        }
+        i++; j++;
+    }
+    jb_printf(&out, "],\"removed\":[");
+    i = 0; j = 0; emitted = 0;
+    while (i < previous->flag_count) {
+        if (j < current->flag_count && b[j].hash < a[i].hash) { j++; continue; }
+        if (j >= current->flag_count || a[i].hash < b[j].hash) {
+            if (a[i].value != 0) jb_printf(&out, "%s\"0x%08X\"", emitted++ ? "," : "", a[i].hash);
+            i++;
+        } else { i++; j++; }
+    }
+    jb_printf(&out, "],\"newGuids\":[");
+    emitted = 0;
+    for (int g = 0; g < current->guid_count; g++) {
+        int seen = 0;
+        for (int h = 0; h < previous->guid_count; h++) if (previous->guids[h] == current->guids[g]) { seen = 1; break; }
+        if (!seen) jb_printf(&out, "%s\"0x%016llX\"", emitted++ ? "," : "", current->guids[g]);
+    }
+    jb_printf(&out, "],\"counts\":{\"added\":%d,\"changed\":%d,\"removed\":%d,\"newGuids\":%d}}",
+              added, changed, removed, new_guids);
+    free(a); free(b);
+    if (!out.p) return NULL;
+    return out.p;
+}
+
+static void remember_delta(char *json) {
+    if (!json) return;
+    if (gw_delta_count == GW_DELTA_RING) {
+        free(gw_delta[gw_delta_first]);
+        gw_delta_first = (gw_delta_first + 1) % GW_DELTA_RING;
+        gw_delta_count--;
+    }
+    gw_delta[(gw_delta_first + gw_delta_count) % GW_DELTA_RING] = json;
+    gw_delta_count++;
+}
+
+static char *save_state_json(const char *query) {
+    SaveEntry entries[GW_SAVE_MAX_SLOTS];
+    int count = collect_saves(entries, GW_SAVE_MAX_SLOTS);
+    char wanted[16] = "latest";
+    if (query) {
+        const char *p = strstr(query, "slot=");
+        if (p) {
+            p += 5;
+            size_t n = strcspn(p, "&");
+            if (n > 0 && n < sizeof wanted) { memcpy(wanted, p, n); wanted[n] = 0; }
+        }
+    }
+    int latest = !strcmp(wanted, "latest");
+    SaveEntry *chosen = NULL;
+    for (int i = 0; i < count; i++) {
+        if (latest || !strcmp(wanted, entries[i].slot)) { chosen = &entries[i]; break; }
+    }
+    if (!chosen) {
+        char *out = malloc(96);
+        if (out) snprintf(out, 96, "{\"schema\":\"macnativegames.progress/1\",\"ok\":false,\"reason\":\"no-save\"}");
+        return out;
+    }
+    pthread_mutex_lock(&gw_save_lock);
+    int is_cached = gw_save.valid && !strcmp(gw_save.path, chosen->path) && gw_save.mtime == chosen->mtime && gw_save.size == chosen->size;
+    SaveState parsed = {0};
+    SaveState *state = NULL;
+    if (is_cached) state = &gw_save;
+    else {
+        int result = parse_save_full(chosen->path, chosen->mtime, chosen->size, &parsed);
+        if (result == -2) {
+            pthread_mutex_unlock(&gw_save_lock);
+            char *out = malloc(96);
+            if (out) snprintf(out, 96, "{\"schema\":\"macnativegames.progress/1\",\"ok\":false,\"reason\":\"save-busy\"}");
+            return out;
+        }
+        if (result != 0) {
+            pthread_mutex_unlock(&gw_save_lock);
+            char *out = malloc(96);
+            if (out) snprintf(out, 96, "{\"schema\":\"macnativegames.progress/1\",\"ok\":false,\"reason\":\"unreadable\"}");
+            return out;
+        }
+        if (latest && gw_save.valid) {
+            char *delta = build_delta_json(&gw_save, &parsed, gw_delta_seq + 1, chosen->slot);
+            if (delta) { gw_delta_seq++; remember_delta(delta); }
+        }
+        free(gw_save.flags);
+        free(gw_save.guids);
+        gw_save = parsed;
+        memset(&parsed, 0, sizeof parsed);
+        state = &gw_save;
+    }
+
+    JsonBuf out = {0};
+    int nonzero = 0;
+    for (int i = 0; i < state->flag_count; i++) if (state->flags[i].value != 0) nonzero++;
+    if (!jb_printf(&out, "{\"schema\":\"macnativegames.progress/1\",\"ok\":true,\"game\":\"%s\",\"version\":\"%s\","
+                         "\"slot\":\"%s\",\"savedAtMs\":%lld,\"seq\":%d,"
+                         "\"position\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f},"
+                         "\"gameTime\":{\"hour\":%d,\"minute\":%d},"
+                         "\"flags\":[",
+                  GW_GAME, TOTK_GAME_VERSION, chosen->slot, state->mtime, gw_delta_seq,
+                  state->xyz[0], state->xyz[1], state->xyz[2], state->hour, state->minute)) {
+        pthread_mutex_unlock(&gw_save_lock);
+        free(out.p);
+        return NULL;
+    }
+    int emitted = 0;
+    for (int i = 0; i < state->flag_count; i++) {
+        if (state->flags[i].value == 0) continue;
+        jb_printf(&out, "%s[\"0x%08X\",%u]", emitted++ ? "," : "", state->flags[i].hash, state->flags[i].value);
+    }
+    jb_printf(&out, "],\"guids\":[");
+    for (int i = 0; i < state->guid_count; i++) jb_printf(&out, "%s\"0x%016llX\"", i ? "," : "", state->guids[i]);
+    jb_printf(&out, "],\"counts\":{\"flags\":%d,\"nonzero\":%d,\"guids\":%d}}",
+              state->flag_count, nonzero, state->guid_count);
+    pthread_mutex_unlock(&gw_save_lock);
+    if (!out.p) return NULL;
+    return out.p;
+}
+
+static char *save_delta_json(const char *query) {
+    int since = query_int(query, "since", 0, 0, 1000000);
+    pthread_mutex_lock(&gw_save_lock);
+    JsonBuf out = {0};
+    if (!jb_printf(&out, "{\"schema\":\"macnativegames.progress/1\",\"ok\":true,\"seq\":%d,\"deltas\":[", gw_delta_seq)) {
+        pthread_mutex_unlock(&gw_save_lock);
+        return NULL;
+    }
+    int emitted = 0;
+    for (int i = 0; i < gw_delta_count; i++) {
+        const char *json = gw_delta[(gw_delta_first + i) % GW_DELTA_RING];
+        if (!json) continue;
+        const char *seq = strstr(json, "\"seq\":");
+        int value = seq ? atoi(seq + 6) : 0;
+        if (value <= since) continue;
+        jb_printf(&out, "%s%s", emitted++ ? "," : "", json);
+    }
+    jb_printf(&out, "]}");
+    pthread_mutex_unlock(&gw_save_lock);
+    return out.p;
+}
+
 static char *save_slots_json(void) {
     SaveEntry entries[GW_SAVE_MAX_SLOTS];
     int count = collect_saves(entries, GW_SAVE_MAX_SLOTS);
@@ -480,6 +806,8 @@ static void meta_json(char *body, size_t capacity) {
              "\"trail\":{\"schema\":\"macnativegames.trail/1\",\"available\":true,\"maxSeconds\":600,\"rateHz\":2},"
              "\"save\":{\"schema\":\"macnativegames.save/1\",\"summary\":true,\"slots\":true,"
              "\"fields\":[\"position\",\"savedAt\",\"slot\"]},"
+             "\"progress\":{\"schema\":\"macnativegames.progress/1\",\"available\":true,"
+             "\"state\":true,\"delta\":true,\"fields\":[\"flags\",\"guids\",\"position\",\"gameTime\",\"seq\"]},"
              "\"control\":{\"available\":false}}}",
              TOTK_GAME_VERSION, GW_GAME, TOTK_GAME_VERSION, gw_port);
 }
@@ -532,6 +860,18 @@ static void *client_thread(void *argument) {
                 char *json = save_slots_json();
                 if (json) { respond(fd, 200, "application/json; charset=utf-8", json); free(json); }
                 else respond(fd, 503, "application/json; charset=utf-8", "{\"error\":{\"code\":\"busy\"}}");
+            } else if (!strcmp(target, "/v1/save/state")) {
+                char *json = save_state_json(query);
+                if (!json) respond(fd, 503, "application/json; charset=utf-8", "{\"error\":{\"code\":\"busy\"}}");
+                else {
+                    int conflict = strstr(json, "\"save-busy\"") != NULL;
+                    respond(fd, conflict ? 409 : 200, "application/json; charset=utf-8", json);
+                    free(json);
+                }
+            } else if (!strcmp(target, "/v1/save/delta")) {
+                char *json = save_delta_json(query);
+                if (json) { respond(fd, 200, "application/json; charset=utf-8", json); free(json); }
+                else respond(fd, 503, "application/json; charset=utf-8", "{\"error\":{\"code\":\"busy\"}}");
             } else if (!strcmp(target, "/v1/save/summary")) {
                 char *json = save_summary_json(query);
                 if (!json) respond(fd, 503, "application/json; charset=utf-8", "{\"error\":{\"code\":\"busy\"}}");
@@ -543,7 +883,7 @@ static void *client_thread(void *argument) {
             } else {
                 respond(fd, 404, "application/json; charset=utf-8",
                         "{\"error\":{\"code\":\"not-found\"},\"endpoints\":[\"/v1/meta\",\"/v1/state\",\"/v1/stream\","
-                        "\"/v1/health\",\"/v1/trail\",\"/v1/save/slots\",\"/v1/save/summary\"]}");
+                        "\"/v1/health\",\"/v1/trail\",\"/v1/save/slots\",\"/v1/save/summary\",\"/v1/save/state\",\"/v1/save/delta\"]}");
             }
         } else {
             respond(fd, 404, "application/json; charset=utf-8", "{\"error\":{\"code\":\"not-found\"}}");

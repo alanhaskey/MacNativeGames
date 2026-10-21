@@ -165,6 +165,8 @@
 |---|---|
 | `GET /v1/save/slots` | `{ "slots": [ { "slot": "00", "savedAt": "...", "size": 2307856 } ] }`（按修改时间倒序） |
 | `GET /v1/save/summary?slot=latest` | `{ "ok":true, "slot":"00", "savedAt":"...", "player":{x,y,z}, "optional":{...null} }` |
+| `GET /v1/save/state?slot=latest` | 解析后的 hash 表 + GUID 数组 + 坐标 + 游戏内时间（见 6.5） |
+| `GET /v1/save/delta?since=<seq>` | 相邻存档之间的增量（见 6.5） |
 | `GET /v1/save/raw?slot=latest` | **不提供**（不暴露原始存档，避免误用/隐私风险） |
 
 规则：
@@ -175,6 +177,38 @@
 - 存档格式随游戏版本变化；`version` 字段用于消费者提示不兼容。
 - 隐私：摘要只含玩家自己的数据；网关只允许本机读取。
 - 失败：存档正在写入时返回 409 `bad-state`（不要读半写文件）。
+
+## 6.5 进度域（progress v1，已实现：解析后的存档状态）
+
+**用途**：给 wiki/收集同步提供"存档里已经完成了什么"，只读、不暴露原始存档。
+**实现**：网关读取 `progress.sav`，解析 hash 表（`u32 hash → u32 value`，从 `0x28` 到哨兵 `0xA3DB7114`，
+哨兵的 value 是 GUID 数组偏移）与 GUID 数组，并附带存档坐标与游戏内时间。
+
+| 端点 | 返回 |
+|---|---|
+| `GET /v1/save/state?slot=latest` | `{ok, slot, savedAtMs, seq, position{x,y,z}, gameTime{hour,minute}, flags:[[hash,value],...], guids:[...], counts{flags,nonzero,guids}}` |
+| `GET /v1/save/delta?since=<seq>` | `{ok, seq, deltas:[{seq,slot,savedAtMs,intervalMs,position,gameTime,added[],changed[],removed[],newGuids[],counts}]}` |
+
+示例（截断）：
+
+```json
+{"schema":"macnativegames.progress/1","ok":true,"game":"totk","version":"1.4.3","slot":"05",
+ "savedAtMs":1761110000000,"seq":1,
+ "position":{"x":168.178,"y":1484.956,"z":1633.941},"gameTime":{"hour":20,"minute":27},
+ "flags":[["0x5F6180D7",1],["0xB33C6725",1]],
+ "guids":["0x058472B9F50BBFA8"],
+ "counts":{"flags":30753,"nonzero":5087,"guids":119}}
+```
+
+约定：
+
+- `flags` 只返回**非 0 的条目**（缺失即 0）；键是小写 `0x%08X` 形式的 **murmurhash3-32(游戏内名字)**，
+  名字/类别表由消费者维护（参考 yalincc/totkmap 的 `totk_save_hashes.js`，正式实现建议自行从 RomFS 生成）。
+- `guids` 是存档 GUID 数组（魔犹伊/遗志/卡邦达/宝箱等对象实例），按存档顺序。
+- `delta` 只在解析到**新的最新存档**时生成（最多保留 8 条）；`since` 为上次收到的 `seq`；
+  跨槽位不会误报。`intervalMs` 供消费者判断增量是否"干净"（窗口越长越可能混合多个事件）。
+- 已实测：1.4.3 存档；类别统计与实机一致（神庙 2/152、克洛格 3/800、洞穴 1/151、井 0/58）。
+- 写入中返回 409 `save-busy`；无存档 `ok:false, reason:"no-save"`。
 
 ## 7. 轨迹域（trail v1，已实现）
 

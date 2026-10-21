@@ -260,6 +260,36 @@
         ]
       },
       "note": "the chest needs a monster hunt cleared first. The player opened it before the 21:18:33 save; that is why the save pair 21:18:33 -> 21:19:42 shows no new flag. The thirteen flags in the 21:17:05 -> 21:18:33 window are therefore a mixed event: monster-hunt completion + reward chest (and possibly first-time flags)."
+    },
+    {
+      "at": "2026-10-21T21:27+08:00",
+      "event": "travel-korok-completed",
+      "saves": [
+        "slot_04@21:19:42",
+        "slot_00@21:27:21"
+      ],
+      "newFlags": [
+        "0x0F16BB49",
+        "0x29A53828",
+        "0x370FFFE0",
+        "0x465ACD4C",
+        "0x4B6A3CAE",
+        "0x9CD57D99",
+        "0xB24B2A83",
+        "0xB3CCF235",
+        "0xF1B6F664"
+      ],
+      "counter": {
+        "hour": [
+          8,
+          11
+        ],
+        "minute": [
+          5,
+          33
+        ]
+      },
+      "note": "one travel Korok (two seeds) in a 7.5-minute save window: nine new flags, so the delta is mixed with other small events (movement/discoveries) or several flags belong to this Korok type. Compare with the clean korok #2 sample (14-second window, exactly one flag)."
     }
   ],
   "findings": {
@@ -291,7 +321,8 @@
       ],
       "note": "the player reported the in-game clock at both saves; hour 0x449B3BA6 and minute 0x2106FA19 match exactly"
     },
-    "prerequisites": "some objects have prerequisites (a reward chest behind a monster hunt). One save delta can then contain several events at once; the wiki binder must treat mixed deltas as multi-event and either split by marker type/position or queue them for review instead of marking one object blindly."
+    "prerequisites": "some objects have prerequisites (a reward chest behind a monster hunt). One save delta can then contain several events at once; the wiki binder must treat mixed deltas as multi-event and either split by marker type/position or queue them for review instead of marking one object blindly.",
+    "windowLength": "the delta can only be as clean as the save interval: korok #2 had 14 s between saves and yielded exactly one flag; the travel korok had 7.5 min and yielded nine, mixing events. The bridge must expose the interval/savedAt and the consumer should treat long windows as multi-event (review queue)."
   },
   "openQuestions": [
     "a clean ordinary chest test (manual save immediately before/after) to confirm the chest group shape",

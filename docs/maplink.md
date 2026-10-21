@@ -32,7 +32,8 @@ The log line `[maplink] position file <path>, one sample every N frames` confirm
 {"schema":"macnativegames.maplink/1","ok":true,"inWorld":true,"game":"totk","version":"1.4.3",
  "frame":12345,"t":1761000000123,
  "x":1234.5,"y":123.4,"z":-567.8,"yaw":90.0,
- "rot":[0.0,0.0,1.0, 0.0,1.0,0.0, -1.0,0.0,0.0],"layer":null}
+ "rot":[0.0,0.0,1.0, 0.0,1.0,0.0, -1.0,0.0,0.0],
+ "layer":0,"layerSource":"height"}
 ```
 
 | Field | Meaning |
@@ -44,7 +45,7 @@ The log line `[maplink] position file <path>, one sample every N frames` confirm
 | `x` / `y` / `z` | player world position in metres; `y` is height (surface around 0, the Depths below, the sky above) |
 | `yaw` | heading in degrees, 0 = +Z, 90 = +X, increasing clockwise when seen from above (north-up map). **Not yet verified in game**; `rot` is the raw source if the sign or axis turns out different |
 | `rot` | the actor's row-major 3×3 rotation, as read from guest memory |
-| `layer` | reserved: `null` for now. Later 0 = surface, 1 = sky, -1 = Depths |
+| `layer` | 0 = surface, 1 = sky, -1 = Depths, `null` when not in world. Derived from height for now (surface ≈ 0..1200 m, sky > 1300 m, Depths < -500 m); `layerSource` says so, and `y` is always there for a consumer that wants to refine it |
 
 The position is read on the present path, after the frame is submitted, and it is the same verified actor lookup the
 world survey uses (`runtime/world_survey.c`), so no extra reverse engineering is needed per game version.

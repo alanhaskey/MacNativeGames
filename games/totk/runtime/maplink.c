@@ -78,17 +78,22 @@ void runtime_maplink_frame(uint64_t frame) {
            atan2(forward.x, forward.z). Degrees, clockwise from +Z, which is what a north-up map wants. */
         double yaw = atan2((double)rot[2], (double)rot[8]) * 180.0 / M_PI;
         if (yaw < 0) yaw += 360.0;
+        /* Layer from height until a game-state signal is found (see docs/next-features-plan.md): surface is roughly
+           0..1200 m, the sky islands start above ~1300 m, the Depths are far below sea level. layerSource stays
+           "height" so a consumer can also compare the raw y. */
+        int layer = xyz[1] < -500.0f ? -1 : (xyz[1] > 1300.0f ? 1 : 0);
         snprintf(json, sizeof json,
                  "{\"schema\":\"macnativegames.maplink/1\",\"ok\":true,\"game\":\"totk\",\"version\":\"%s\","
                  "\"frame\":%llu,\"t\":%lld,\"inWorld\":true,\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,\"yaw\":%.1f,"
-                 "\"rot\":[%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f],\"layer\":null}\n",
+                 "\"rot\":[%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f],"
+                 "\"layer\":%d,\"layerSource\":\"height\"}\n",
                  TOTK_GAME_VERSION, (unsigned long long)frame, t,
                  xyz[0], xyz[1], xyz[2], yaw,
-                 rot[0], rot[1], rot[2], rot[3], rot[4], rot[5], rot[6], rot[7], rot[8]);
+                 rot[0], rot[1], rot[2], rot[3], rot[4], rot[5], rot[6], rot[7], rot[8], layer);
     } else {
         snprintf(json, sizeof json,
                  "{\"schema\":\"macnativegames.maplink/1\",\"ok\":false,\"game\":\"totk\",\"version\":\"%s\","
-                 "\"frame\":%llu,\"t\":%lld,\"inWorld\":%s}\n",
+                 "\"frame\":%llu,\"t\":%lld,\"inWorld\":%s,\"layer\":null}\n",
                  TOTK_GAME_VERSION, (unsigned long long)frame, t, in_world ? "true" : "false");
     }
     runtime_gateway_publish(json, strlen(json));   /* served by the in-game gateway, no separate process */

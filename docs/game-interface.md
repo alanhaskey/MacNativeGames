@@ -128,7 +128,7 @@
 | `x/y/z` | number | 世界坐标（米） |
 | `yaw` | number\|null | 朝向；`headingSource` 说明来源（`actor`/`motion`/`unknown`） |
 | `rot` | number[9] | 原始 3×3 旋转（行主序），供精确换算/校准 |
-| `layer` | number\|null | 分层，当前恒 null |
+| `layer` | number\|null | `1` 天空 / `0` 地表 / `-1` 地底 / `null` 不在世界。当前由高度推导（`layerSource:"height"`，阈值：<-500 地底、>1300 天空），消费者可结合 `y` 自行修正 |
 
 网关端点（已实现）：
 

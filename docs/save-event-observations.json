@@ -477,6 +477,24 @@
         "0xC3C3C9CE": "0 -> 0x3F480000"
       },
       "note": "clean 30-second cave discovery (池边的洞窟): two flags. Both also appeared in the earlier mixed window, which confirms the cave attribution and leaves 0x2539B0FC as the combat/chest-related flag there."
+    },
+    {
+      "at": "2026-10-21T22:01+08:00",
+      "event": "bubbul-defeated-and-cave-completed",
+      "saves": [
+        "slot_00@22:01:27",
+        "slot_03@22:01:51"
+      ],
+      "newFlags": [
+        "0x19036D19",
+        "0x19F8BB57",
+        "0x291CE3B7",
+        "0x3A8438F6",
+        "0x7C58C606",
+        "0x89561362"
+      ],
+      "item": "bubbul-gem",
+      "note": "24-second window: defeated the Bubbul, got 魔犹伊的遗失物, and the cave entrance on the map turned completed. Six flags - a mixed completion event (Bubbul + cave completion + item). None overlaps the cave-discovery flags 0x0E76344B/0xE713E9E7, so completion is a separate group."
     }
   ],
   "findings": {
@@ -515,10 +533,11 @@
     "shrineCompletion": "shrine-1 completion: ten flags; shrine-2 completion: seven flags, no overlap. Both discovery and completion are per-shrine; the battery reward may add its own flags inside the same delta.",
     "dataBlob": "progress.sav contains opaque state blobs; 0x0D9510.. is a list of 8-byte hashes that changes at chest/korok/shrine events and grew at each chest. These 64-bit values do not match the wiki marker source_ids (tested little and big endian). Detecting an event is possible; enumerating which chest is open requires decoding this structure.",
     "chest": "two observations point to chests having no per-chest flag in progress.sav: the 21:44 chest showed zero flag changes and the 21:55 window was contaminated by combat/items. State lives in a noisy blob. Chest sync needs memory events (phase 2) or blob decoding.",
-    "cave": "cave discovery sets two flags (0x0E76344B, 0xE713E9E7) plus the value 0xC3C3C9CE; clean 30 s window. Cave discovery is therefore save-syncable."
+    "cave": "cave discovery sets two flags (0x0E76344B, 0xE713E9E7) plus the value 0xC3C3C9CE; clean 30 s window. Cave discovery is therefore save-syncable.",
+    "caveCompletion": "defeating the Bubbul and completing the cave (map entrance marked done) sets six flags in one window: 0x19036D19, 0x19F8BB57, 0x291CE3B7, 0x3A8438F6, 0x7C58C606, 0x89561362. Bubbul-only vs cave-completion-only separation needs another sample of either kind."
   },
   "openQuestions": [
-    "cave completion (all bubbul gems?) - later sample",
+    "separate Bubbul-only from cave-completion-only flags (another cave or another Bubbul)",
     "truly clean chest test (save, open ONE chest, save, no combat/items)",
     "decode the blob to enumerate opened chests and other object states"
   ]

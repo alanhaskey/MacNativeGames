@@ -1,0 +1,183 @@
+{
+  "schema": "macnativegames.save-events/1",
+  "game": "totk",
+  "version": "1.4.3",
+  "recordedAt": "2026-10-21",
+  "saveLayout": {
+    "size": 2307856,
+    "magic": "0x01020304",
+    "header": "0x49E946",
+    "tableStart": "0x28",
+    "tableEndHash": "0xA3DB7114",
+    "tableEntries": 30722,
+    "positionTag": "0xC884818D",
+    "worldPositionTag": "0x8773F02D"
+  },
+  "observations": [
+    {
+      "at": "2026-10-21T20:35+08:00",
+      "event": "korok-completed",
+      "saves": [
+        "slot_03@20:35:03",
+        "slot_00@20:35:45"
+      ],
+      "newFlags": [],
+      "counterDeltas": {
+        "0x449B3BA6": 1
+      },
+      "note": "no per-object flag in the top-level table; footprint.sav changed 23 bytes, caption.sav 9.6 KB",
+      "position": [
+        245.7,
+        1554.9,
+        822.5
+      ]
+    },
+    {
+      "at": "2026-10-21T20:40+08:00",
+      "event": "shrine-discovered",
+      "saves": [
+        "slot_04@20:37:20",
+        "slot_05@20:40:32"
+      ],
+      "newFlags": [
+        "0x5F6180D7"
+      ],
+      "counterDeltas": {
+        "0x449B3BA6": 1
+      },
+      "position": [
+        263.8,
+        1565.4,
+        915.7
+      ],
+      "note": "shrine 乌克乌候神庙; the counter also moved because of the discovery"
+    },
+    {
+      "at": "2026-10-21T20:46+08:00",
+      "event": "shrine-activated",
+      "saves": [
+        "slot_05@20:40:32",
+        "slot_00@20:46:28"
+      ],
+      "newFlags": [
+        "0x161D8560",
+        "0xDFA99B55"
+      ],
+      "counterDeltas": {},
+      "note": "discovery flag 0x5F6180D7 stays set",
+      "position": [
+        275.2,
+        1565.8,
+        910.4
+      ]
+    },
+    {
+      "at": "2026-10-21T20:49+08:00",
+      "event": "ability-ultrahand",
+      "saves": [
+        "slot_00@20:46:28",
+        "slot_01@20:49:39"
+      ],
+      "newFlags": [
+        "0x19C7D1B4",
+        "0x4884D3FF",
+        "0x5E6E5C29",
+        "0x8816DC32",
+        "0xD3ED7034",
+        "0xE019F1A2",
+        "0xF1DD8751"
+      ],
+      "counterDeltas": {
+        "0x449B3BA6": 1
+      },
+      "position": [
+        270.7,
+        1565.4,
+        915.1
+      ]
+    },
+    {
+      "at": "2026-10-21T20:52+08:00",
+      "event": "chest-1-opened",
+      "saves": [
+        "slot_00@20:51:52",
+        "slot_02@20:52:07"
+      ],
+      "newFlags": [
+        "0x1BED068D",
+        "0x1F23D973",
+        "0xAD3CBF08"
+      ],
+      "counterDeltas": {},
+      "item": "amber",
+      "position": [
+        26.7,
+        -5.0,
+        -55.7
+      ],
+      "note": "the shrine's only chest; position is inside the shrine interior"
+    },
+    {
+      "at": "2026-10-21T20:57+08:00",
+      "event": "shrine-completed",
+      "saves": [
+        "slot_00@20:55:45",
+        "slot_03@20:57:31"
+      ],
+      "newFlags": [
+        "0x173A7C02",
+        "0x39726C36",
+        "0x563D4028",
+        "0x5DBCB47B",
+        "0xA4E0A289",
+        "0xBE2F447A",
+        "0xBE7431FD",
+        "0xD3555C85",
+        "0xDF90990F",
+        "0xF9360377"
+      ],
+      "counterDeltas": {},
+      "item": "light-of-blessing",
+      "note": "0x31AB5580 8->12 and a hash-like field 0x03B85CAE changed as well",
+      "position": [
+        276.4,
+        1565.6,
+        909.9
+      ]
+    },
+    {
+      "at": "2026-10-21T21:01+08:00",
+      "event": "chest-2-opened",
+      "saves": [
+        "slot_00@21:01:15",
+        "slot_04@21:01:26"
+      ],
+      "newFlags": [
+        "0xDBEA8E06",
+        "0xF9525C48"
+      ],
+      "counterDeltas": {},
+      "item": "opal",
+      "position": [
+        281.7,
+        1498.3,
+        924.4
+      ],
+      "note": "no key overlaps with chest-1, so the groups look per-object"
+    }
+  ],
+  "findings": {
+    "eventModel": "an in-game event sets a group of opaque 32-bit flag keys; no flag name or object id is needed to detect it",
+    "perObject": "chest-1 {0x1BED068D,0x1F23D973,0xAD3CBF08} and chest-2 {0xDBEA8E06,0xF9525C48} do not overlap",
+    "korok": "no flag observed; only the counter 0x449B3BA6 increments",
+    "counter0x449B3BA6": "increments on korok completion, shrine discovery and ultrahand; not on chests or shrine completion; exact meaning unknown",
+    "hashMapping": "CRC32/CRC32C/Murmur3-32/FNV-1a over 3373 GameDataList names and 666 wiki source_ids do not produce the observed keys",
+    "position": "the save carries the player position (tag 0xC884818D), so no memory read is needed for the binding step"
+  },
+  "openQuestions": [
+    "does a second shrine completion produce a different ten-key group?",
+    "which keys in the chest groups are generic (first chest only) versus per-object?",
+    "what does counter 0x449B3BA6 count?",
+    "same experiments for bubbul gems, caves, side adventures and other game versions"
+  ]
+}

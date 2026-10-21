@@ -290,6 +290,79 @@
         ]
       },
       "note": "one travel Korok (two seeds) in a 7.5-minute save window: nine new flags, so the delta is mixed with other small events (movement/discoveries) or several flags belong to this Korok type. Compare with the clean korok #2 sample (14-second window, exactly one flag)."
+    },
+    {
+      "at": "2026-10-21T21:32+08:00",
+      "event": "shrine-2-discovered",
+      "saves": [
+        "slot_05@21:29:30",
+        "slot_01@21:32:15"
+      ],
+      "newFlags": [
+        "0x03D86D9D",
+        "0x1E850C99",
+        "0x50A8D439",
+        "0x946ABA40",
+        "0xA18880B3",
+        "0xDF539D50"
+      ],
+      "note": "伊恩伊萨神庙. None of these equals the first shrine's discovery flag 0x5F6180D7, so discovery is per-shrine. Several counters also moved: 0x16D9641D 0->2, 0x63866C56 7->8, 0x9DD69D5F 10->11, 0xC41B7240 2->3."
+    },
+    {
+      "at": "2026-10-21T21:34+08:00",
+      "event": "ability-fuse",
+      "saves": [
+        "slot_01@21:32:15",
+        "slot_02@21:34:12"
+      ],
+      "newFlags": [
+        "0x14F7CB7C",
+        "0x8856D212",
+        "0xA2E3B2AA",
+        "0xF9096408"
+      ],
+      "note": "余料建造. 0x161D8560 goes 1->2 (a shrine-activation counter, not a per-shrine flag); 0xA04D6D59 1->0"
+    },
+    {
+      "at": "2026-10-21T21:35+08:00",
+      "event": "chest-5-arrows",
+      "saves": [
+        "slot_02@21:34:12",
+        "slot_03@21:35:35"
+      ],
+      "newFlags": [
+        "0x54E15C5C",
+        "0x5A31806A",
+        "0x9C38A014",
+        "0xA5ADB894",
+        "0xA6700CC4",
+        "0xE77E72A9"
+      ],
+      "item": "wooden-arrows-x5",
+      "note": "six flags in a 1.4-minute window"
+    },
+    {
+      "at": "2026-10-21T21:37+08:00",
+      "event": "chest-6-small-key",
+      "saves": [
+        "slot_00@21:35:40",
+        "slot_04@21:37:14"
+      ],
+      "newFlags": [
+        "0x0D40A82F",
+        "0x29CA9946",
+        "0x2EA7FFD1",
+        "0x5D9FA8FB",
+        "0x5EFE6D59",
+        "0x6C09C8CD",
+        "0x86E7E532",
+        "0xC7B15F7B",
+        "0xD4F9F555",
+        "0xE5BD1359",
+        "0xFCA2AC6A"
+      ],
+      "item": "small-key",
+      "note": "eleven flags in a 1.5-minute window; 0x5976A9AE 0xFFFFFFFF -> 0x0000000B (counter init?)"
     }
   ],
   "findings": {
@@ -322,12 +395,13 @@
       "note": "the player reported the in-game clock at both saves; hour 0x449B3BA6 and minute 0x2106FA19 match exactly"
     },
     "prerequisites": "some objects have prerequisites (a reward chest behind a monster hunt). One save delta can then contain several events at once; the wiki binder must treat mixed deltas as multi-event and either split by marker type/position or queue them for review instead of marking one object blindly.",
-    "windowLength": "the delta can only be as clean as the save interval: korok #2 had 14 s between saves and yielded exactly one flag; the travel korok had 7.5 min and yielded nine, mixing events. The bridge must expose the interval/savedAt and the consumer should treat long windows as multi-event (review queue)."
+    "windowLength": "the delta can only be as clean as the save interval: korok #2 had 14 s between saves and yielded exactly one flag; the travel korok had 7.5 min and yielded nine, mixing events. The bridge must expose the interval/savedAt and the consumer should treat long windows as multi-event (review queue).",
+    "shrineDiscovery": "shrine-1 discovery flag 0x5F6180D7; shrine-2 discovery produced six flags, none equal to it: discovery flags are per-shrine, and the group can include first-time flags",
+    "counters": "0x161D8560 increments when a shrine is activated (1->2), and 0x16D9641D / 0x63866C56 / 0x9DD69D5F / 0xC41B7240 also increment on discovery - these are counters, not per-object flags"
   },
   "openQuestions": [
-    "a clean ordinary chest test (manual save immediately before/after) to confirm the chest group shape",
+    "a clean ordinary chest test (save immediately before/after) to see the minimal chest group",
     "which of the six keys in the first-korok window belongs to the korok itself?",
-    "does a second shrine completion produce a different ten-key group?",
     "bubbul gems, caves, side adventures, other game versions"
   ]
 }

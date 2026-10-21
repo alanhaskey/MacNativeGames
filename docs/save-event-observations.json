@@ -402,12 +402,28 @@
         "blobRegion": "0x0D9560-0x0D9868 (about 700 bytes)",
         "note": "byte-level diff; the real chest state appears to live in this opaque blob"
       }
+    },
+    {
+      "at": "2026-10-21T21:48+08:00",
+      "event": "korok-3-completed",
+      "saves": [
+        "slot_00@21:44:36",
+        "slot_03@21:48:27"
+      ],
+      "newFlags": [
+        "0xE5203D31"
+      ],
+      "dataChanges": {
+        "blobRegion": "0x0D9800-0x0D9870",
+        "bytes": 109
+      },
+      "note": "one new flag, different from korok-2's 0xB33C6725 - koroks have one per-object flag each; the data blob also grew by about 109 bytes"
     }
   ],
   "findings": {
     "eventModel": "an in-game event sets a group of opaque 32-bit flag keys; no flag name or object id is needed to detect it",
     "perObject": "chest-1 {0x1BED068D,0x1F23D973,0xAD3CBF08} and chest-2 {0xDBEA8E06,0xF9525C48} do not overlap",
-    "korok": "korok #2 sets exactly one persistent flag 0xB33C6725; the first korok window also contained five first-time UI/save flags that persist, which is why it looked flagless",
+    "korok": "koroks set exactly one per-object flag each: korok-2 0xB33C6725, korok-3 0xE5203D31. The first korok window looked flagless only because it also contained first-time UI/save flags.",
     "counter0x449B3BA6": "values run 16..23 then wrap to 0..4 across saves, so it is not an event counter; most likely an in-game hour (0-23) or another time-like field. Earlier 'increments on event X' observations were time passing.",
     "hashMapping": "CRC32/CRC32C/Murmur3-32/FNV-1a over 3373 GameDataList names and 666 wiki source_ids do not produce the observed keys",
     "position": "the save carries the player position (tag 0xC884818D), so no memory read is needed for the binding step",
@@ -442,8 +458,7 @@
   },
   "openQuestions": [
     "decode the 8-byte-ID blob (0x0D9510..) to enumerate opened chests and other object states",
-    "a clean ordinary chest test to separate blob writes from achievement flags",
-    "which of the six keys in the first-korok window belongs to the korok itself?",
+    "clean ordinary chest test to separate blob writes from achievement flags",
     "bubbul gems, caves, side adventures, other game versions"
   ]
 }

@@ -1,4 +1,8 @@
-# Map link interfaces — plan v1 (frozen for P1)
+# Map link interfaces — position domain detail (v1)
+
+> The master contract for **all** game-side data (position, save, trail, control) is
+> [docs/game-interface.md](game-interface.md). This file keeps the detailed position/bridge notes and the
+> implementation history of the local bridge.
 
 > Status: **planned**. Decisions below were made 2026-10-21. The game-side exporter exists as an **uncommitted prototype**
 > (working, built, off-switch `TOTK_MAPLINK=0`); the bridge and consumers are **design only** — no code written yet.

@@ -1,5 +1,7 @@
 # Map link: the player's position for an external map
 
+> Part of the game-side interface contract: [docs/game-interface.md](game-interface.md) (position domain).
+
 An optional, **read-only** output for interactive-map projects: a few times a second the game writes the player's world
 position to a small JSON file. Nothing is written into the game, no gameplay state is touched, and the feature does not
 gate on a test profile (unlike `TOTK_SURVEY`, which can also move the player).

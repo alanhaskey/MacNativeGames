@@ -22,7 +22,7 @@ player's live position through one small, stable contract, without knowing anyth
 |---|---|---|---|---|---|
 | A1 | Position file (`maplink.json`) | game → local disk | JSON, atomic rename, 10 Hz | the bridge; a single project that wants no daemon | prototype done |
 | A2 | Position datagrams (optional, P4) | game → localhost | UDP 127.0.0.1:17861, JSON line per sample | low-latency tools | design |
-| **B** | **Bridge `maplinkd`** | local → local | HTTP on 127.0.0.1:17862 + SSE | **every project** | design |
+| **B** | **Bridge `maplinkd`** | local → local | HTTP on 127.0.0.1:17862 + SSE | **every project** | **implemented (P0)** |
 | C | Direct file read | game → project | direct read of A1 | Zelda Wiki alternative, scripts | design |
 | D | Reverse control (P3, not now) | project → game | command channel | map click → in-game marker/teleport | out of scope |
 
@@ -131,11 +131,11 @@ The map projection stays in the consumer: `gameCoordinatesToMapCoordinate({x,z})
 - Upstream style: environment-gated, documented, default-off policy respected via `TOTK_MAPLINK=0`.
 - Privacy: loopback only; payload contains no save data, no keys, no paths beyond the local data folder.
 
-## 8. Current state of the prototype (not committed)
+## 8. Current state
 
 | Item | State |
 |---|---|
-| Producer `runtime/maplink.c` + hooks + launcher default | written, compiled, built into `/Applications/Tears of the Kingdom.app` (1.4.3), 2 min 47 s cached build |
-| Docs | this file + `docs/maplink.md` (producer contract) |
-| Bridge `maplinkd` | not written |
-| Zelda Wiki changes | none — reverted; reference patch in `/tmp/maplink-wiki-preview/` |
+| Producer `runtime/maplink.c` + hooks + launcher default | committed on branch `totk-to-wiki`, built into `/Applications/Tears of the Kingdom.app` (1.4.3) |
+| Bridge `maplinkd` | **implemented** in `tools/maplinkd/`: `/v1/meta`, `/v1/state`, `/v1/stream` (SSE), `/v1/health`; 12 contract tests pass; launchd installer included |
+| Docs | this file + `docs/maplink.md` (producer contract) + `tools/maplinkd/README.md` |
+| Zelda Wiki changes | none yet (branch `totk-to-wiki` created); reference patch in `/tmp/maplink-wiki-preview/` |

@@ -47,7 +47,7 @@ source.addEventListener("state", (event) => {
 ## State contract
 
 ```json
-{"schema":"macnativegames.maplink/1","ok":true,"status":"live","ageMs":84,
+{"schema":"macnativegames.maplink/1","ok":true,"inWorld":true,"status":"live","ageMs":84,
  "frame":123456,"t":1761000000123,"game":"totk","version":"1.4.3",
  "x":1234.5,"y":123.4,"z":-567.8,"yaw":90.0,
  "headingSource":"actor","layer":null}
@@ -56,7 +56,7 @@ source.addEventListener("state", (event) => {
 | `status` | Meaning |
 |---|---|
 | `live` | in world and the sample is at most `--stale-ms` old (default 1000 ms) |
-| `not-in-world` | the game is on the title screen, loading, or in a menu (`ok:false`) |
+| `not-in-world` | the game is on the title screen, in the main menu, or loading (`ok:false`; `inWorld` is false) |
 | `stale` | the file exists but the newest sample is old; the fields are the last known values |
 | `disconnected` | the file is missing, unreadable, or the producer has been silent for `--disconnect-ms` (default 10 s) |
 

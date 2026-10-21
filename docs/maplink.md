@@ -27,7 +27,7 @@ The log line `[maplink] position file <path>, one sample every N frames` confirm
 ## File contents
 
 ```json
-{"schema":"macnativegames.maplink/1","ok":true,"game":"totk","version":"1.4.3",
+{"schema":"macnativegames.maplink/1","ok":true,"inWorld":true,"game":"totk","version":"1.4.3",
  "frame":12345,"t":1761000000123,
  "x":1234.5,"y":123.4,"z":-567.8,"yaw":90.0,
  "rot":[0.0,0.0,1.0, 0.0,1.0,0.0, -1.0,0.0,0.0],"layer":null}
@@ -35,7 +35,8 @@ The log line `[maplink] position file <path>, one sample every N frames` confirm
 
 | Field | Meaning |
 |---|---|
-| `ok` | `false` on the title screen, while loading, and in menus; then only `schema`, `game`, `version`, `frame`, `t` are present |
+| `ok` | `true` only in the world: the game has presented a real world frame and a player actor was found. `false` on the title screen, in the main menu, while loading and in menus; then only `schema`, `inWorld`, `game`, `version`, `frame`, `t` are present |
+| `inWorld` | true once the game is really in the world: the first-world-frame draw-count gate fired, **or** the player left the main menu's placeholder position (the origin). The menu keeps a placeholder player actor at (0, -0.15, 0); this flag keeps it out of the map |
 | `frame` | the game's present counter when the sample was taken |
 | `t` | host wall clock in Unix milliseconds; compare with the current time to detect a stale file |
 | `x` / `y` / `z` | player world position in metres; `y` is height (surface around 0, the Depths below, the sky above) |
@@ -60,8 +61,15 @@ consecutive positions instead (`atan2(Δx, Δz)`) and report the discrepancy, or
 
 ## Status
 
-First version, 1.4.3 Mac build. Known open items:
+First version, 1.4.3 Mac build. Verified end to end on 2026-10-21:
 
-- `yaw` sign/axis not yet checked against the in-game camera.
+- the main menu reports `ok:false, inWorld:false` (its placeholder player at the origin is not published);
+- loading a save turns it to `ok:true` with real coordinates, and the bridge serves `status:"live"` (sample age ~30 ms);
+- `yaw` tracked the movement direction within about 10° across a scripted cutscene (0 = +Z, 90 = +X), so the
+  convention looks right, but it has not been checked in free gameplay yet.
+
+Known open items:
+
+- `yaw` needs one free-gameplay check (walk four directions) before a map treats it as exact.
 - `layer` is not classified yet; consumers should treat it as unknown.
 - Breath of the Wild has no player actor layout in this runtime yet and reports nothing.

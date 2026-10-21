@@ -25,6 +25,11 @@
 void runtime_maplink_init(Module *m) { (void)m; }
 void runtime_maplink_frame(uint64_t frame) { (void)frame; }
 #else
+/* hle_nvn.c: set when the first real world frame is presented (draw-count gate). It is a useful extra signal but not
+   reliable for every scene, so the producer also treats a player that has left the main menu's placeholder position
+   (the origin, identity rotation) as "in world"; that latch is what the map needs. */
+extern int runtime_world_ready(void);
+static int world_latch;
 static char path[PATH_MAX];
 static int enabled, step = 6;
 static uint64_t next_frame;
@@ -64,14 +69,17 @@ void runtime_maplink_frame(uint64_t frame) {
     char json[640];
     long long t = wall_ms();
     float xyz[3], rot[9];
-    if (runtime_survey_player(xyz, rot)) {
+    int found = runtime_survey_player(xyz, rot);
+    if (found && (fabsf(xyz[0]) > 0.05f || fabsf(xyz[2]) > 0.05f)) world_latch = 1;   /* the menu placeholder is (0, -0.15, 0) */
+    int in_world = runtime_world_ready() || world_latch;
+    if (found && in_world) {
         /* Actor rotation is a row-major 3x3; local forward +Z becomes the third column, so the world heading is
            atan2(forward.x, forward.z). Degrees, clockwise from +Z, which is what a north-up map wants. */
         double yaw = atan2((double)rot[2], (double)rot[8]) * 180.0 / M_PI;
         if (yaw < 0) yaw += 360.0;
         snprintf(json, sizeof json,
                  "{\"schema\":\"macnativegames.maplink/1\",\"ok\":true,\"game\":\"totk\",\"version\":\"%s\","
-                 "\"frame\":%llu,\"t\":%lld,\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,\"yaw\":%.1f,"
+                 "\"frame\":%llu,\"t\":%lld,\"inWorld\":true,\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,\"yaw\":%.1f,"
                  "\"rot\":[%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f],\"layer\":null}\n",
                  TOTK_GAME_VERSION, (unsigned long long)frame, t,
                  xyz[0], xyz[1], xyz[2], yaw,
@@ -79,8 +87,8 @@ void runtime_maplink_frame(uint64_t frame) {
     } else {
         snprintf(json, sizeof json,
                  "{\"schema\":\"macnativegames.maplink/1\",\"ok\":false,\"game\":\"totk\",\"version\":\"%s\","
-                 "\"frame\":%llu,\"t\":%lld}\n",
-                 TOTK_GAME_VERSION, (unsigned long long)frame, t);
+                 "\"frame\":%llu,\"t\":%lld,\"inWorld\":%s}\n",
+                 TOTK_GAME_VERSION, (unsigned long long)frame, t, in_world ? "true" : "false");
     }
     write_json(json);
 }

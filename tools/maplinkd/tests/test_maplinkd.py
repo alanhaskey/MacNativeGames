@@ -24,7 +24,7 @@ SCHEMA = "macnativegames.maplink/1"
 
 
 def sample(ok=True, age_ms=0, **extra):
-    payload = {"schema": SCHEMA, "ok": ok, "game": "totk", "version": "1.4.3",
+    payload = {"schema": SCHEMA, "ok": ok, "inWorld": ok, "game": "totk", "version": "1.4.3",
                "frame": 4242, "t": int(time.time() * 1000) - age_ms}
     if ok:
         payload.update({"x": 1234.5, "y": 123.4, "z": -567.8, "yaw": 90.0,
@@ -92,6 +92,7 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(state["z"], -567.8)
         self.assertEqual(state["yaw"], 90.0)
         self.assertLess(state["ageMs"], 1000)
+        self.assertTrue(state["inWorld"])
         status, _, body = self.get("/v1/health")
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])

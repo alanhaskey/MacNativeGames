@@ -29,7 +29,7 @@ RATE_HZ = 10
 DEFAULT_FILE = os.path.expanduser("~/Library/Application Support/MacNativeGames/TOTK/maplink.json")
 DEFAULT_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000")
 
-EMPTY_STATE = {"schema": SCHEMA, "ok": False, "status": "disconnected", "ageMs": None,
+EMPTY_STATE = {"schema": SCHEMA, "ok": False, "inWorld": False, "status": "disconnected", "ageMs": None,
                "frame": None, "t": None, "game": None, "version": None,
                "x": None, "y": None, "z": None, "yaw": None, "headingSource": "unknown",
                "layer": None}
@@ -84,7 +84,7 @@ def compute_state(path, cache, stale_ms, disconnect_ms):
     age = max(0, now_ms() - int(data["t"]))
     state.update(t=int(data["t"]), game=data.get("game"), version=data.get("version"),
                  frame=data.get("frame") if isinstance(data.get("frame"), int) else None,
-                 layer=data.get("layer"), ageMs=age)
+                 layer=data.get("layer"), ageMs=age, inWorld=bool(data.get("inWorld")))
     if data.get("ok"):
         if not all(is_number(data.get(k)) for k in ("x", "y", "z")):
             state.update(reason="producer-invalid: position")

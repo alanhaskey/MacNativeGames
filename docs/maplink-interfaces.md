@@ -32,6 +32,7 @@ player's live position through one small, stable contract, without knowing anyth
 {
   "schema": "macnativegames.maplink/1",
   "ok": true,
+  "inWorld": true,
   "status": "live",
   "ageMs": 84,
   "frame": 123456,
@@ -49,7 +50,8 @@ player's live position through one small, stable contract, without knowing anyth
 | Field | Type | Meaning |
 |---|---|---|
 | `schema` | string | `macnativegames.maplink/1`; consumers reject other majors |
-| `ok` | bool | `true` only in world (a player actor was found) |
+| `ok` | bool | `true` only in world (world frame seen **and** a player actor found; the menu's placeholder player is excluded) |
+| `inWorld` | bool | the producer's world-ready flag, passed through |
 | `status` | enum | bridge-added: `live` \| `not-in-world` \| `stale` \| `disconnected` |
 | `ageMs` | int | bridge-added: ms since `t` |
 | `frame` | int | game present counter at sampling |

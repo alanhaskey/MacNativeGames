@@ -509,16 +509,11 @@
       ],
       "item": "old-shirt",
       "gameTime": {
-        "hour": [
-          22,
-          23
-        ],
-        "minute": [
-          44,
-          41
-        ]
+        "hour": 23,
+        "minute": 41,
+        "reported": "23:40"
       },
-      "note": "another chest: two new flags, both disjoint from all earlier chest groups. Combined with the other chest observations (0, 1, 2, 3, 4, 6, 11 flags) this confirms the flags are achievement/first-item style, not a per-chest identity. The hour field 22->23 also matches the reported game time 23:04."
+      "note": "another chest: two new flags, both disjoint from all earlier chest groups. Combined with the other chest observations (0, 1, 2, 3, 4, 6, 11 flags) this confirms the flags are achievement/first-item style, not a per-chest identity. The hour field reads 23 and the minute field 41; the player reported 23:40, so the one-minute difference is within the reading/save timing."
     }
   ],
   "findings": {
@@ -546,9 +541,15 @@
           "inGame": "08:05",
           "hour": 8,
           "minute": 5
+        },
+        {
+          "at": "2026-10-21T22:06:40+08:00",
+          "inGame": "23:40 (reported)",
+          "hour": 23,
+          "minute": 41
         }
       ],
-      "note": "the player reported the in-game clock at both saves; hour 0x449B3BA6 and minute 0x2106FA19 match exactly"
+      "note": "hour 0x449B3BA6 and minute 0x2106FA19 match the reported in-game clock (8:00/8:05 exact; 23:40 reported vs 23:41 read, within one minute of reading/save timing)"
     },
     "prerequisites": "some objects have prerequisites (a reward chest behind a monster hunt). One save delta can then contain several events at once; the wiki binder must treat mixed deltas as multi-event and either split by marker type/position or queue them for review instead of marking one object blindly.",
     "windowLength": "the delta can only be as clean as the save interval: korok #2 had 14 s between saves and yielded exactly one flag; the travel korok had 7.5 min and yielded nine, mixing events. The bridge must expose the interval/savedAt and the consumer should treat long windows as multi-event (review queue).",

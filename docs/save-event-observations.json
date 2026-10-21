@@ -445,6 +445,22 @@
         ]
       },
       "note": "mixed window: chest opened plus cave entrance 池边的洞窟 discovered, no save in between. Three flags cannot be attributed; the cave likely adds new data records (0x0A67/0x0BF3/0x0C3D) and several counters +3. Needs two separate clean tests."
+    },
+    {
+      "at": "2026-10-21T21:55+08:00",
+      "event": "chest-clean-test",
+      "saves": [
+        "slot_00@21:54:57",
+        "slot_01@21:55:34"
+      ],
+      "newFlags": [
+        "0x2539B0FC"
+      ],
+      "dataChanges": {
+        "totalBytes": 988,
+        "note": "blob changes are present but also appear in pure-movement windows (571-776 bytes), so a changed blob is not an event signal"
+      },
+      "note": "clean 37-second chest test: only one flag changed (0x2539B0FC), which also appeared in the cave window and is reset later - not a chest identity flag. The 8-byte-ID list head (0x0D9510) is identical in the 21:52, 21:54 and 21:55 saves. Conclusion: chest identity is not recoverable from save flags, and the blob changes during movement as well, so save-only chest sync is unreliable."
     }
   ],
   "findings": {
@@ -481,12 +497,12 @@
     "shrineDiscovery": "shrine-1 discovery flag 0x5F6180D7; shrine-2 discovery produced six flags, none equal to it: discovery flags are per-shrine, and the group can include first-time flags",
     "counters": "0x161D8560 increments when a shrine is activated (1->2), and 0x16D9641D / 0x63866C56 / 0x9DD69D5F / 0xC41B7240 also increment on discovery - these are counters, not per-object flags",
     "shrineCompletion": "shrine-1 completion: ten flags; shrine-2 completion: seven flags, no overlap. Both discovery and completion are per-shrine; the battery reward may add its own flags inside the same delta.",
-    "dataBlob": "progress.sav contains opaque state blobs; 0x0D9510.. is a list of 8-byte hashes that changes at chest/korok/shrine events and grew at each chest. These 64-bit values do not match the wiki marker source_ids (tested little and big endian). Detecting an event is possible; enumerating which chest is open requires decoding this structure."
+    "dataBlob": "progress.sav contains opaque state blobs; 0x0D9510.. is a list of 8-byte hashes that changes at chest/korok/shrine events and grew at each chest. These 64-bit values do not match the wiki marker source_ids (tested little and big endian). Detecting an event is possible; enumerating which chest is open requires decoding this structure.",
+    "chest": "chests set no per-chest flag (clean 37 s test: only 0x2539B0FC, a scene-like flag). Their state lives in an opaque blob that also changes while moving, so save-delta detection cannot isolate a chest opening. Chest sync needs the memory-event path (phase 2) or decoding the blob."
   },
   "openQuestions": [
-    "clean chest test: save, open ONE chest, save immediately (no movement/menu)",
-    "clean cave test: save just before entering the cave mouth, save right after the discovery notice",
-    "decode the 8-byte-ID blob (0x0D9510..) to enumerate opened chests and object states",
+    "clean cave test: save before entering the cave mouth, save right after the discovery notice",
+    "decode the blob to enumerate opened chests and other object states",
     "bubbul gems, side adventures, other game versions"
   ]
 }

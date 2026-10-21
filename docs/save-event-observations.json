@@ -460,7 +460,7 @@
         "totalBytes": 988,
         "note": "blob changes are present but also appear in pure-movement windows (571-776 bytes), so a changed blob is not an event signal"
       },
-      "note": "clean 37-second chest test: only one flag changed (0x2539B0FC), which also appeared in the cave window and is reset later - not a chest identity flag. The 8-byte-ID list head (0x0D9510) is identical in the 21:52, 21:54 and 21:55 saves. Conclusion: chest identity is not recoverable from save flags, and the blob changes during movement as well, so save-only chest sync is unreliable."
+      "note": "not clean after all: between the two saves the player killed three monsters and picked up items, so the single flag cannot be attributed to the chest. The chest likely sets no identity flag, but this needs one more truly clean test (save, open chest only, save)."
     }
   ],
   "findings": {
@@ -498,11 +498,11 @@
     "counters": "0x161D8560 increments when a shrine is activated (1->2), and 0x16D9641D / 0x63866C56 / 0x9DD69D5F / 0xC41B7240 also increment on discovery - these are counters, not per-object flags",
     "shrineCompletion": "shrine-1 completion: ten flags; shrine-2 completion: seven flags, no overlap. Both discovery and completion are per-shrine; the battery reward may add its own flags inside the same delta.",
     "dataBlob": "progress.sav contains opaque state blobs; 0x0D9510.. is a list of 8-byte hashes that changes at chest/korok/shrine events and grew at each chest. These 64-bit values do not match the wiki marker source_ids (tested little and big endian). Detecting an event is possible; enumerating which chest is open requires decoding this structure.",
-    "chest": "chests set no per-chest flag (clean 37 s test: only 0x2539B0FC, a scene-like flag). Their state lives in an opaque blob that also changes while moving, so save-delta detection cannot isolate a chest opening. Chest sync needs the memory-event path (phase 2) or decoding the blob."
+    "chest": "two observations point to chests having no per-chest flag in progress.sav: the 21:44 chest showed zero flag changes and the 21:55 window was contaminated by combat/items. State lives in a noisy blob. Chest sync needs memory events (phase 2) or blob decoding."
   },
   "openQuestions": [
+    "truly clean chest test: save, open ONE chest with no combat/items in between, save",
     "clean cave test: save before entering the cave mouth, save right after the discovery notice",
-    "decode the blob to enumerate opened chests and other object states",
-    "bubbul gems, side adventures, other game versions"
+    "decode the blob to enumerate opened chests and other object states"
   ]
 }

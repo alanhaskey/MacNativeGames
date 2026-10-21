@@ -103,7 +103,11 @@ in-game calibration and a defined fallback:
 
 Acceptance: walking north on the map moves the arrow north within one sample (100 ms), including after a pause.
 
-## 5. Consumers
+## 5. Consumers (see also: [game login and live position](game-login-and-position.md))
+
+The production path for the wiki server is designed separately: the app launcher logs in, keeps the tokens in the
+Keychain and uploads the position over WSS (2 Hz) to the wiki, which fans it out to the player's own map page. The local
+bridge stays the developer/local-tool interface. See [docs/game-login-and-position.md](game-login-and-position.md).
 
 | Consumer | Reads | P1 work |
 |---|---|---|

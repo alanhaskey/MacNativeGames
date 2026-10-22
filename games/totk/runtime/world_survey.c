@@ -29,12 +29,6 @@
    Verified on the Mac 2026-10-21 (5 m step: walks, camera follows; Hebra to Oman Au shrine: lands, in control). */
 _Atomic int runtime_survey_pending;
 const int32_t runtime_survey_sync[2] = {0, -1};   /* read by hle_nvn.c only once the survey found the system object, which it never does here */
-void runtime_survey_init(Module *m) {
-    (void)m;
-    if (getenv("TOTK_SURVEY")) runtime_fail("Breath of the Wild has no survey");
-}
-int runtime_survey_player(float xyz[3], float rot[9]) { (void)xyz; (void)rot; return 0; }   /* the TotK actor layout does not exist here */
-int runtime_survey_command(const char *line) { (void)line; return 0; }
 void runtime_survey_tick(uint64_t frame) { (void)frame; }
 void runtime_survey_cancel_user(void) { }
 #if defined(GAME_BOTW160)
@@ -184,6 +178,7 @@ void runtime_survey_init(Module *m) {
     (void)m;
     if (getenv("TOTK_SURVEY")) runtime_fail("survey: only Breath of the Wild 1.6.0 has the player position chains");
 }
+int runtime_survey_player(float xyz[3], float rot[9]) { (void)xyz; (void)rot; return 0; }   /* the TotK actor layout does not exist here */
 int runtime_survey_command(const char *line) { (void)line; return 0; }
 #endif
 #else

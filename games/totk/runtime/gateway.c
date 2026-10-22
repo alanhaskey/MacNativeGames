@@ -462,7 +462,7 @@ static char *build_delta_json(const SaveState *previous, const SaveState *curren
         if (j >= current->flag_count || (i < previous->flag_count && a[i].hash < b[j].hash)) { i++; continue; }
         if (i >= previous->flag_count || b[j].hash < a[i].hash) {
             if (b[j].value != 0) {
-                jb_printf(&out, "%s{\"hash\":\"0x%08X\",\"value\":%u}", emitted++ ? "," : "", b[j].hash, b[j].value);
+                jb_printf(&out, "%s{\"hash\":\"0x%08X\",\"from\":0,\"to\":%u}", emitted++ ? "," : "", b[j].hash, b[j].value);
             }
             j++;
         } else { i++; j++; }
@@ -482,7 +482,7 @@ static char *build_delta_json(const SaveState *previous, const SaveState *curren
     while (i < previous->flag_count) {
         if (j < current->flag_count && b[j].hash < a[i].hash) { j++; continue; }
         if (j >= current->flag_count || a[i].hash < b[j].hash) {
-            if (a[i].value != 0) jb_printf(&out, "%s\"0x%08X\"", emitted++ ? "," : "", a[i].hash);
+            if (a[i].value != 0) jb_printf(&out, "%s{\"hash\":\"0x%08X\",\"from\":%u,\"to\":0}", emitted++ ? "," : "", a[i].hash, a[i].value);
             i++;
         } else { i++; j++; }
     }
@@ -511,6 +511,27 @@ static void remember_delta(char *json) {
     gw_delta_count++;
 }
 
+/* Parse the newest save if it changed; keeps the delta history current for every endpoint (lock held). */
+static int refresh_latest_state_locked(void) {
+    SaveEntry entries[GW_SAVE_MAX_SLOTS];
+    int count = collect_saves(entries, GW_SAVE_MAX_SLOTS);
+    if (count <= 0) return 0;
+    SaveEntry *latest = &entries[0];
+    for (int i = 1; i < count; i++) if (entries[i].mtime > latest->mtime) latest = &entries[i];
+    if (gw_save.valid && !strcmp(gw_save.path, latest->path) && gw_save.mtime == latest->mtime && gw_save.size == latest->size) return 0;
+    SaveState parsed = {0};
+    int result = parse_save_full(latest->path, latest->mtime, latest->size, &parsed);
+    if (result != 0) return result;
+    if (gw_save.valid) {
+        char *delta = build_delta_json(&gw_save, &parsed, gw_delta_seq + 1, latest->slot);
+        if (delta) { gw_delta_seq++; remember_delta(delta); }
+    }
+    free(gw_save.flags);
+    free(gw_save.guids);
+    gw_save = parsed;
+    return 1;
+}
+
 static char *save_state_json(const char *query) {
     SaveEntry entries[GW_SAVE_MAX_SLOTS];
     int count = collect_saves(entries, GW_SAVE_MAX_SLOTS);
@@ -534,6 +555,13 @@ static char *save_state_json(const char *query) {
         return out;
     }
     pthread_mutex_lock(&gw_save_lock);
+    int refreshed = refresh_latest_state_locked();
+    if (refreshed == -2) {
+        pthread_mutex_unlock(&gw_save_lock);
+        char *out = malloc(96);
+        if (out) snprintf(out, 96, "{\"schema\":\"macnativegames.progress/1\",\"ok\":false,\"reason\":\"save-busy\"}");
+        return out;
+    }
     int is_cached = gw_save.valid && !strcmp(gw_save.path, chosen->path) && gw_save.mtime == chosen->mtime && gw_save.size == chosen->size;
     SaveState parsed = {0};
     SaveState *state = NULL;
@@ -594,6 +622,7 @@ static char *save_state_json(const char *query) {
 static char *save_delta_json(const char *query) {
     int since = query_int(query, "since", 0, 0, 1000000);
     pthread_mutex_lock(&gw_save_lock);
+    (void)refresh_latest_state_locked(); /* delta polling also discovers new saves; busy files retry next poll */
     JsonBuf out = {0};
     if (!jb_printf(&out, "{\"schema\":\"macnativegames.progress/1\",\"ok\":true,\"seq\":%d,\"deltas\":[", gw_delta_seq)) {
         pthread_mutex_unlock(&gw_save_lock);

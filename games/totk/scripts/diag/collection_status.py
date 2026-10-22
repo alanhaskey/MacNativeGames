@@ -84,7 +84,9 @@ def main():
                 if int(key, 16) in guids:
                     done[key] = marker
             else:
-                wanted = clear if info.get('value') == 'Clear' else info.get('value', 1)
+                wanted = info.get('valueHash')
+                if wanted is None:
+                    wanted = clear if info.get('value') == 'Clear' else info.get('value', 1)
                 if flags.get(int(key, 16), 0) == wanted:
                     done[key] = marker
         result['categories'][category] = {

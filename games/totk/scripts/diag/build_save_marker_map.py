@@ -354,6 +354,8 @@ def main():
         'counts': report['counts'],
         'categories': {name: {'kind': expectations.get(name, {}).get('kind', 'flag'),
                               'value': expectations.get(name, {}).get('value', 1),
+                              'valueHash': (1 if expectations.get(name, {}).get('value', 1) == 1
+                                            else murmur3_32(expectations.get(name, {}).get('value', 'Clear'))),
                               'map': values}
                        for name, values in categories.items()},
     }

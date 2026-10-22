@@ -18,9 +18,11 @@ from extract_exefs import decrypt, common_tickets, container_entries
 from extract_update_romfs import hactool_prod_keys, merge
 import build_app
 
+BOTW_TITLE = 0x01007EF00011E000
 
-def update_nca(managed=True):
-    data = nca(managed)
+
+def update_nca(managed=True, title=TITLE):
+    data = nca(managed, title=title)
     header = bytearray(b''.join(decrypt(HEADER, modes.XTS(i.to_bytes(16, 'big')),
                                      data[i*512:(i+1)*512]) for i in range(6)))
     header[0x604] = 4  # BKTR marker in section 1; these tests extract only ExeFS.
@@ -76,6 +78,27 @@ class Updates(unittest.TestCase):
         (tree/'.venv').symlink_to(sys.prefix, target_is_directory=True)
         with patch.dict(build_app.UPDATED, {'exefs_sha256': {'main': build_app.UPDATED['exefs_sha256']['main']}}), self.assertRaisesRegex(build_app.BuildError, 'ExeFS main'):
             build_app.step_code(tree, self.update, self.keys, os.environ, self.root/'logs', version='v112')
+        self.assertFalse((tree/'rewritten').exists())
+
+    def test_botw190_update_is_extracted_by_the_botw_script_and_checked_against_its_pins(self):
+        tree = self.root/'tree'; tree.mkdir()
+        (tree/'scripts').symlink_to(SCRIPTS, target_is_directory=True)
+        (self.root/'botw').mkdir(); (self.root/'botw/scripts').symlink_to(SCRIPTS.parents[1]/'botw/scripts', target_is_directory=True)
+        (tree/'.venv').symlink_to(sys.prefix, target_is_directory=True)
+        botw = self.root/'botw-update.nsp'
+        botw.write_bytes(partition([('program.nca', update_nca(title=BOTW_TITLE)), ('common.tik', ticket())]))
+        pins = {'exefs_sha256': {'main': build_app.BOTW190['exefs_sha256']['main']}, 'display_version': '1.9.0',
+                'title_id': build_app.BOTW190['title_id']}
+        with patch.dict(build_app.VERSIONS, {'botw190': pins}):
+            # the synthetic ExeFS is extracted by games/botw/scripts/extract_exefs.py (#117) and then fails its pin
+            with self.assertRaisesRegex(build_app.BuildError, 'ExeFS main'):
+                build_app.step_code_botw(tree, self.root/'botw', botw, self.keys, os.environ, self.root/'logs', version='botw190')
+            self.assertEqual((tree/'extracted/botw190/exefs/main').read_bytes(), b'synthetic main')
+            # a Tears of the Kingdom update is another game for it
+            shutil.rmtree(tree/'extracted')
+            with self.assertRaisesRegex(build_app.BuildError, 'extract_exefs.py failed'):
+                build_app.step_code_botw(tree, self.root/'botw', self.update, self.keys, os.environ, self.root/'logs', version='botw190')
+        self.assertIn('Expected one update Program NCA of 01007EF00011E000', (self.root/'logs/extract_exefs-botw190.log').read_text())
         self.assertFalse((tree/'rewritten').exists())
 
     def test_nsz_conversion_is_cached_by_source_identity(self):
@@ -235,7 +258,7 @@ class Updates(unittest.TestCase):
                 (tree/f'build/shader-seed/{version}/seed-manifest.json').write_text(json.dumps(dict(
                     version=version, chain='totk-native-v6-unverified', shaders=8000,
                     files={'pso_manifest.tsv':hashlib.sha256(b'test').hexdigest()})))
-                with patch.object(build_app, 'sign_app') as signing:
+                with patch.object(build_app, 'app_seal_valid', return_value=True), patch.object(build_app, 'sign_app') as signing:
                     build_app.step_app(tree,out,self.root/'logs',version=version)
                 signing.assert_called_once_with(out.with_name(out.name+'.partial'),self.root/'logs')
                 info=plistlib.loads((out/'Contents/Info.plist').read_bytes())
@@ -273,7 +296,7 @@ class Updates(unittest.TestCase):
         (seed/'seed-manifest.json').write_text(json.dumps(dict(version='v112',chain='totk-native-v6-unverified',shaders=1,files={'x':'0'*64})))
         def fake_clone(_source, target):
             target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(b'synthetic payload')
-        with patch.object(build_app,'clone',side_effect=fake_clone),patch.object(build_app,'sign_app') as signing:
+        with patch.object(build_app,'clone',side_effect=fake_clone),patch.object(build_app,'app_seal_valid',return_value=True),patch.object(build_app,'sign_app') as signing:
             with self.assertRaisesRegex(build_app.BuildError,'invalid prepared startup shader seed'):
                 build_app.step_app(tree,out,self.root/'logs',version='v143')
             signing.assert_not_called()
@@ -295,7 +318,7 @@ class Updates(unittest.TestCase):
             self.assertEqual(old.read_bytes(),b'old running app')
             checks.append(True)
             return SimpleNamespace(stdout=str(old.resolve())+'\n' if len(checks)==1 else '')
-        with patch.object(build_app,'data_bundle',side_effect=fake_data_bundle),patch.object(build_app,'clone',side_effect=fake_clone),patch.object(build_app,'sign_app'), \
+        with patch.object(build_app,'data_bundle',side_effect=fake_data_bundle),patch.object(build_app,'clone',side_effect=fake_clone),patch.object(build_app,'sign_app'),patch.object(build_app,'app_seal_valid',return_value=True), \
              patch.object(build_app.subprocess,'run',side_effect=processes),patch.object(build_app.time,'sleep') as pause:
             build_app.step_app(tree,out,self.root/'logs',version='v143')
         self.assertEqual(len(checks),2);pause.assert_called_once_with(2)

@@ -36,6 +36,8 @@ void runtime_memscan_start(void) { }
 #define MS_WATCH_BYTES 65536
 #define MS_PROBE_MAX 8
 #define MS_PROBE_HITS 24
+#define MS_TARGET_MAX 32
+#define MS_TARGET_WATCH_BYTES 4096
 #define MS_WATCH_MS 100
 
 static FILE *ms_file;
@@ -51,7 +53,12 @@ static unsigned char *ms_hash_prev;
 static uintptr_t ms_hash_base;
 static size_t ms_hash_size;
 static unsigned char *ms_unstable_pages;
-static int ms_guid_count;
+static unsigned long long ms_target_id;
+static int ms_have_target;
+static double ms_target_xyz[3];
+static int ms_have_target_xyz;
+static unsigned long long ms_target_hits[MS_TARGET_MAX];
+static int ms_target_hit_count;static int ms_guid_count;
 static double ms_last_xyz[3];
 static int ms_have_xyz;
 
@@ -176,8 +183,26 @@ static int load_save_anchors(void) {
         for (char *token = strtok_r(copy, ", ", &saveptr); token && ms_probe_count < MS_PROBE_MAX; token = strtok_r(NULL, ", ", &saveptr))
             ms_probe_hashes[ms_probe_count++] = (unsigned)strtoul(token, NULL, 16);
     }
-    ms_log("save %s: flag anchors %d, guid anchors %d, flag probes %d%s", path, ms_flag_count, ms_guid_count,
-           ms_probe_count, ms_have_xyz ? "" : " (no position)");
+    ms_have_target = 0;
+    const char *target = getenv("TOTK_MEMSCAN_TARGET");
+    if (target && *target) {
+        ms_target_id = strtoull(target, NULL, 0);
+        ms_have_target = 1;
+    }
+    ms_have_target_xyz = 0;
+    const char *target_xyz = getenv("TOTK_MEMSCAN_TARGET_XYZ");
+    if (target_xyz && *target_xyz) {
+        char copy[128];
+        snprintf(copy, sizeof copy, "%s", target_xyz);
+        char *saveptr = NULL;
+        int n = 0;
+        for (char *token = strtok_r(copy, ",", &saveptr); token && n < 3; token = strtok_r(NULL, ",", &saveptr))
+            ms_target_xyz[n++] = atof(token);
+        ms_have_target_xyz = n == 3;
+    }
+    ms_log("save %s: flag anchors %d, guid anchors %d, flag probes %d, target %s%016llX%s", path, ms_flag_count,
+           ms_guid_count, ms_probe_count, ms_have_target ? "0x" : "(none) ",
+           ms_have_target ? ms_target_id : 0ULL, ms_have_xyz ? "" : " (no position)");
     return ms_flag_count >= 2 && ms_guid_count >= 2;
 }
 
@@ -195,6 +220,17 @@ static void scan_buffer(const unsigned char *buffer, size_t length, uintptr_t ba
             const unsigned char *at = memmem(p, (size_t)(buffer + length - p), needle, 8);
             if (!at) break;
             ms_flag_hits[a][ms_flag_hit_count[a]++].address = base + (uintptr_t)(at - buffer);
+            p = at + 1;
+        }
+    }
+    if (ms_have_target && ms_target_hit_count < MS_TARGET_MAX) {
+        unsigned char needle[8];
+        memcpy(needle, &ms_target_id, 8);
+        const unsigned char *p = buffer;
+        while (p + 8 <= buffer + length && ms_target_hit_count < MS_TARGET_MAX) {
+            const unsigned char *at = memmem(p, (size_t)(buffer + length - p), needle, 8);
+            if (!at) break;
+            ms_target_hits[ms_target_hit_count++] = (unsigned long long)(base + (uintptr_t)(at - buffer));
             p = at + 1;
         }
     }
@@ -252,6 +288,7 @@ static void scan_memory(void) {
     memset(ms_flag_hit_count, 0, sizeof ms_flag_hit_count);
     memset(ms_probe_hit_count, 0, sizeof ms_probe_hit_count);
     ms_guid_hit_count = 0;
+    ms_target_hit_count = 0;
     uintptr_t heap = 0, alias = 0;
     uint64_t heap_size = 0, alias_size = 0;
     runtime_guest_regions(&heap, &heap_size, &alias, &alias_size);
@@ -270,6 +307,7 @@ static void scan_memory(void) {
         if (ms_flag_hit_count[i]) ms_log("  flag anchor 0x%08X hit %d, first %#llx", (unsigned)(ms_flags[i] & 0xFFFFFFFFu), ms_flag_hit_count[i], (unsigned long long)ms_flag_hits[i][0].address);
     for (int i = 0; i < ms_guid_hit_count && i < 8; i++)
         ms_log("  guid pair hit %#llx", (unsigned long long)ms_guid_hits[i].address);
+    if (ms_have_target) ms_log("target 0x%016llX hits %d", ms_target_id, ms_target_hit_count);
     for (int a = 0; a < ms_probe_count; a++) {
         ms_log("  flag probe 0x%08X hits %d", ms_probe_hashes[a], ms_probe_hit_count[a]);
         for (int k = 0; k < ms_probe_hit_count[a] && k < 6; k++) {
@@ -459,10 +497,40 @@ static void *scan_thread(void *unused) {
         if (!in_world) {
             ms_log("menu placeholder position; watching skipped, waiting for trigger/next scan");
         } else {
-            choose_hash_window();
-            uintptr_t table = choose_flag_table();
-            if (table) watch(table, "flagtable");
-            if (ms_guid_hit_count > 0) watch(ms_guid_hits[0].address, "guidlist");
+            if (ms_have_target && ms_target_hit_count > 0) {
+                /* Pick the hit whose neighbourhood holds the expected world position (the actor struct). */
+                uintptr_t best = 0;
+                for (int i = 0; i < ms_target_hit_count; i++) {
+                    uintptr_t at = (uintptr_t)ms_target_hits[i];
+                    unsigned char page[4096];
+                    mach_vm_size_t got2 = 0;
+                    if (mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)(at & ~(uintptr_t)0xFFF),
+                                               (mach_vm_size_t)sizeof page, (mach_vm_address_t)(uintptr_t)page, &got2) != KERN_SUCCESS || got2 != sizeof page)
+                        continue;
+                    for (int f = 0; f + 12 <= (int)sizeof page; f += 4) {
+                        float fx, fy, fz;
+                        memcpy(&fx, page + f, 4); memcpy(&fy, page + f + 4, 4); memcpy(&fz, page + f + 8, 4);
+                        if (!ms_have_target_xyz) { best = at; break; }
+                        double dx = fx - ms_target_xyz[0], dy = fy - ms_target_xyz[1], dz = fz - ms_target_xyz[2];
+                        if (dx * dx + dy * dy + dz * dz < 25.0) {
+                            best = at; break;
+                        }
+                    }
+                    if (best) break;
+                }
+                if (best) {
+                    ms_log("target actor candidate %#llx", (unsigned long long)best);
+                    watch(best & ~(uintptr_t)0xFFF, "target");
+                } else {
+                    ms_log("target id found but no position match");
+                    watch((uintptr_t)ms_target_hits[0] & ~(uintptr_t)0xFFF, "target");
+                }
+            } else {
+                choose_hash_window();
+                uintptr_t table = choose_flag_table();
+                if (table) watch(table, "flagtable");
+                if (ms_guid_hit_count > 0) watch(ms_guid_hits[0].address, "guidlist");
+            }
         }
         /* No watch started (nothing found): retry after a while or when triggered. */
         for (int i = 0; i < 30; i++) {

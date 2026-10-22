@@ -58,7 +58,12 @@ static int ms_have_target;
 static double ms_target_xyz[3];
 static int ms_have_target_xyz;
 static unsigned long long ms_target_hits[MS_TARGET_MAX];
-static int ms_target_hit_count;static int ms_guid_count;
+static int ms_target_hit_count;
+static unsigned char *ms_snap_data;
+static uintptr_t ms_snap_base;
+static int ms_snap_valid;
+#define MS_SNAP_BYTES 4096
+static int ms_guid_count;
 static double ms_last_xyz[3];
 static int ms_have_xyz;
 
@@ -481,6 +486,99 @@ static void choose_hash_window(void) {
     if (pthread_create(&thread, NULL, hash_watch_thread, NULL) == 0) pthread_detach(thread);
 }
 
+static uintptr_t locate_target(void) {
+    uintptr_t best = 0;
+    for (int i = 0; i < ms_target_hit_count && !best; i++) {
+        uintptr_t at = (uintptr_t)ms_target_hits[i];
+        unsigned char page[4096];
+        mach_vm_size_t got = 0;
+        if (mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)(at & ~(uintptr_t)0xFFF),
+                                   (mach_vm_size_t)sizeof page, (mach_vm_address_t)(uintptr_t)page, &got) != KERN_SUCCESS || got != sizeof page)
+            continue;
+        if (!ms_have_target_xyz) { best = at; break; }
+        for (int f = 0; f + 12 <= (int)sizeof page; f += 4) {
+            float fx, fy, fz;
+            memcpy(&fx, page + f, 4); memcpy(&fy, page + f + 4, 4); memcpy(&fz, page + f + 8, 4);
+            double dx = fx - ms_target_xyz[0], dy = fy - ms_target_xyz[1], dz = fz - ms_target_xyz[2];
+            if (dx * dx + dy * dy + dz * dz < 25.0) { best = at; break; }
+        }
+    }
+    return best;
+}
+
+static void take_snapshot(uintptr_t base) {
+    if (!ms_snap_data) ms_snap_data = malloc(MS_SNAP_BYTES);
+    if (!ms_snap_data) return;
+    mach_vm_size_t got = 0;
+    if (mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)base, MS_SNAP_BYTES,
+                               (mach_vm_address_t)(uintptr_t)ms_snap_data, &got) != KERN_SUCCESS || got != MS_SNAP_BYTES) {
+        ms_log("snapshot read failed at %#llx", (unsigned long long)base);
+        return;
+    }
+    ms_snap_base = base;
+    ms_snap_valid = 1;
+    ms_log("snapshot taken at %#llx (%d bytes)", (unsigned long long)base, MS_SNAP_BYTES);
+}
+
+static void diff_snapshot(void) {
+    if (!ms_snap_valid || !ms_snap_data) { ms_log("diff requested but no snapshot"); return; }
+    unsigned char current[MS_SNAP_BYTES];
+    mach_vm_size_t got = 0;
+    if (mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)ms_snap_base, MS_SNAP_BYTES,
+                               (mach_vm_address_t)(uintptr_t)current, &got) != KERN_SUCCESS || got != MS_SNAP_BYTES) {
+        ms_log("diff read failed at %#llx", (unsigned long long)ms_snap_base);
+        return;
+    }
+    int changes = 0;
+    for (int i = 0; i + 4 <= MS_SNAP_BYTES; i += 4) {
+        unsigned before = read_u32(ms_snap_data + i), after = read_u32(current + i);
+        if (before == after) continue;
+        changes++;
+        ms_log("SNAPSHOT DIFF %#llx: 0x%08X -> 0x%08X", (unsigned long long)(ms_snap_base + i), before, after);
+    }
+    ms_log("snapshot diff done: %d changed dwords (base %#llx)", changes, (unsigned long long)ms_snap_base);
+    memcpy(ms_snap_data, current, MS_SNAP_BYTES);
+}
+
+static void snapshot_thread_paths(char *before, size_t bcap, char *after, size_t acap) {
+    const char *profile = getenv("TOTK_PROFILE_DIR");
+    if (profile && *profile) {
+        snprintf(before, bcap, "%s/../memscan.before", profile);
+        snprintf(after, acap, "%s/../memscan.after", profile);
+    } else {
+        snprintf(before, bcap, "memscan.before");
+        snprintf(after, acap, "memscan.after");
+    }
+}
+
+static void *snapshot_thread(void *unused) {
+    (void)unused;
+    char before[PATH_MAX], after[PATH_MAX];
+    snapshot_thread_paths(before, sizeof before, after, sizeof after);
+    sleep(8);
+    for (;;) {
+        struct stat st;
+        if (stat(after, &st) == 0) {
+            remove(after);
+            diff_snapshot();
+            continue;
+        }
+        if (stat(before, &st) == 0) {
+            remove(before);
+            float xyz[3];
+            int in_world = runtime_survey_player(xyz, NULL) && (xyz[0] * xyz[0] + xyz[2] * xyz[2] > 4.0f);
+            if (!in_world) { ms_log("before trigger while at menu; ignored"); continue; }
+            if (!load_save_anchors()) { ms_log("before trigger: no anchors"); continue; }
+            scan_memory();
+            uintptr_t base = locate_target();
+            if (base) take_snapshot(base & ~(uintptr_t)0xFF); else ms_log("before trigger: target not located");
+            continue;
+        }
+        usleep(500000);
+    }
+    return NULL;
+}
+
 static void *scan_thread(void *unused) {
     (void)unused;
     sleep(12); /* let the world load */
@@ -544,8 +642,14 @@ static void *scan_thread(void *unused) {
 void runtime_memscan_start(void) {
     const char *on = getenv("TOTK_MEMSCAN");
     if (!on || !*on || !strcmp(on, "0")) return;
+    const char *snapshot = getenv("TOTK_MEMSCAN_SNAPSHOT");
     pthread_t thread;
-    if (pthread_create(&thread, NULL, scan_thread, NULL) == 0) pthread_detach(thread);
-    ms_log("starting diagnostic scan (read-only)");
+    if (snapshot && *snapshot && strcmp(snapshot, "0") != 0) {
+        if (pthread_create(&thread, NULL, snapshot_thread, NULL) == 0) pthread_detach(thread);
+        ms_log("starting target snapshot mode (read-only)");
+    } else {
+        if (pthread_create(&thread, NULL, scan_thread, NULL) == 0) pthread_detach(thread);
+        ms_log("starting diagnostic scan (read-only)");
+    }
 }
 #endif

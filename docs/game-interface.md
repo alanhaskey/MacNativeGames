@@ -143,6 +143,10 @@
 
 `status` 规则：`live`（`ok` 且样本 ≤1 s）；`not-in-world`（`ok:false`）；`stale`（>1 s）；`disconnected`（文件缺失或 >10 s 无更新，带 `reason`）。
 
+内部场景补充：进入神庙/神兽内部时玩家坐标会切到该场景的本地坐标系（约在原点附近）。生产者会冻结进入前的世界坐标并输出
+`interior:true`/`positionSource:"frozen"`/`rawPosition`；若**启动时人就在神庙里**，则用内部坐标签名 + 最后世界坐标文件
+（`<maplink.json>.last_world.json`，每秒最多写一次）恢复冻结位置。
+
 详细语义见 [docs/maplink.md](maplink.md)（生产者）与 [docs/maplink-interfaces.md](maplink-interfaces.md)（网关与状态细节）。
 
 ## 6. 存档域（save v1，已实现：位置/savedAt/槽位）

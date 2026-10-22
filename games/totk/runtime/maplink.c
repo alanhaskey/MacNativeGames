@@ -24,6 +24,36 @@
 
 #ifdef GAME_BOTW
 void runtime_maplink_init(Module *m) { (void)m; }
+/* Shrine interiors all share one local layout: the player starts around (0, 2, 54). The signature is only used to
+   bootstrap when the game is launched with the player already inside a shrine (the save records local coordinates). */
+static int interior_signature(const float xyz[3]) {
+    return fabsf(xyz[0]) < 30.0f && fabsf(xyz[1] - 2.5f) < 10.0f && fabsf(xyz[2] - 55.0f) < 50.0f;
+}
+
+static void last_world_load(double xyz[3]) {
+    if (!last_world_path[0]) return;
+    FILE *f = fopen(last_world_path, "r");
+    if (!f) return;
+    double x = 0, y = 0, z = 0;
+    int ok = fscanf(f, "{\"x\":%lf,\"y\":%lf,\"z\":%lf", &x, &y, &z) == 3;
+    fclose(f);
+    if (ok) { xyz[0] = x; xyz[1] = y; xyz[2] = z; have_last_world_file = 1; }
+}
+
+static void last_world_save(const float xyz[3], double yaw, long long now) {
+    if (!last_world_path[0] || now - last_world_write_ms < 1000) return;
+    float dx = xyz[0] - last_world_xyz[0], dz = xyz[2] - last_world_xyz[2];
+    if (have_stable && dx * dx + dz * dz < 4.0f) return;
+    last_world_write_ms = now;
+    memcpy(last_world_xyz, xyz, sizeof last_world_xyz);
+    char temporary[PATH_MAX + 8];
+    if (snprintf(temporary, sizeof temporary, "%s.tmp", last_world_path) >= (int)sizeof temporary) return;
+    FILE *f = fopen(temporary, "w");
+    if (!f) return;
+    fprintf(f, "{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,\"yaw\":%.1f,\"t\":%lld}\n", xyz[0], xyz[1], xyz[2], yaw, now);
+    if (fclose(f) == 0) rename(temporary, last_world_path); else remove(temporary);
+}
+
 void runtime_maplink_frame(uint64_t frame) { (void)frame; }
 #else
 /* hle_nvn.c: set when the first real world frame is presented (draw-count gate). It is a useful extra signal but not
@@ -34,6 +64,10 @@ static int world_latch;
 static int interior;                 /* inside a separate scene (shrine/divine beast): local coordinates near the origin */
 static int seeded;                   /* first world sample consumed: bootstrap interior detection from the latest save */
 static int have_stable;
+static char last_world_path[PATH_MAX];
+static float last_world_xyz[3];
+static long long last_world_write_ms;
+static int have_last_world_file;
 static float stable_xyz[3];
 static double stable_yaw;
 static char path[PATH_MAX];
@@ -50,6 +84,8 @@ void runtime_maplink_init(Module *m) {
     const char *s = getenv("TOTK_MAPLINK_FRAME_STEP");
     if (s) { int v = atoi(s); if (v >= 1 && v <= 600) step = v; }
     enabled = 1;
+    if (snprintf(last_world_path, sizeof last_world_path, "%s.last_world.json", path) >= (int)sizeof last_world_path)
+        last_world_path[0] = 0;
     fprintf(stderr, "[maplink] position file %s, one sample every %d frames\n", path, step);
 }
 
@@ -67,6 +103,36 @@ static void write_json(const char *json) {
     if (fclose(f) != 0) ok = 0;
     if (ok) rename(temporary, path);
     else remove(temporary);
+}
+
+/* Shrine interiors all share one local layout: the player starts around (0, 2, 54). The signature is only used to
+   bootstrap when the game is launched with the player already inside a shrine (the save records local coordinates). */
+static int interior_signature(const float xyz[3]) {
+    return fabsf(xyz[0]) < 30.0f && fabsf(xyz[1] - 2.5f) < 10.0f && fabsf(xyz[2] - 55.0f) < 50.0f;
+}
+
+static void last_world_load(double xyz[3]) {
+    if (!last_world_path[0]) return;
+    FILE *f = fopen(last_world_path, "r");
+    if (!f) return;
+    double x = 0, y = 0, z = 0;
+    int ok = fscanf(f, "{\"x\":%lf,\"y\":%lf,\"z\":%lf", &x, &y, &z) == 3;
+    fclose(f);
+    if (ok) { xyz[0] = x; xyz[1] = y; xyz[2] = z; have_last_world_file = 1; }
+}
+
+static void last_world_save(const float xyz[3], double yaw, long long now) {
+    if (!last_world_path[0] || now - last_world_write_ms < 1000) return;
+    float dx = xyz[0] - last_world_xyz[0], dz = xyz[2] - last_world_xyz[2];
+    if (have_stable && dx * dx + dz * dz < 4.0f) return;
+    last_world_write_ms = now;
+    memcpy(last_world_xyz, xyz, sizeof last_world_xyz);
+    char temporary[PATH_MAX + 8];
+    if (snprintf(temporary, sizeof temporary, "%s.tmp", last_world_path) >= (int)sizeof temporary) return;
+    FILE *f = fopen(temporary, "w");
+    if (!f) return;
+    fprintf(f, "{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,\"yaw\":%.1f,\"t\":%lld}\n", xyz[0], xyz[1], xyz[2], yaw, now);
+    if (fclose(f) == 0) rename(temporary, last_world_path); else remove(temporary);
 }
 
 void runtime_maplink_frame(uint64_t frame) {
@@ -94,7 +160,27 @@ void runtime_maplink_frame(uint64_t frame) {
         if (!seeded) {
             seeded = 1;
             double save_xyz[3];
-            if (near_origin && runtime_gateway_latest_position(save_xyz)) {
+            int have_save = runtime_gateway_latest_position(save_xyz);
+            if (interior_signature(xyz)) {
+                double last_xyz[3];
+                interior = 1;
+                last_world_load(last_xyz);
+                if (have_last_world_file) {
+                    stable_xyz[0] = (float)last_xyz[0];
+                    stable_xyz[1] = (float)last_xyz[1];
+                    stable_xyz[2] = (float)last_xyz[2];
+                } else if (have_save) {
+                    stable_xyz[0] = (float)save_xyz[0];
+                    stable_xyz[1] = (float)save_xyz[1];
+                    stable_xyz[2] = (float)save_xyz[2];
+                } else {
+                    memcpy(stable_xyz, xyz, sizeof stable_xyz);
+                }
+                stable_yaw = 0;
+                have_stable = 1;
+                fprintf(stderr, "[maplink] started inside an interior scene (signature); frozen at %.1f, %.1f, %.1f\n",
+                        stable_xyz[0], stable_xyz[1], stable_xyz[2]);
+            } else if (near_origin && have_save) {
                 float dx = xyz[0] - (float)save_xyz[0], dz = xyz[2] - (float)save_xyz[2];
                 if (dx * dx + dz * dz > 300.0f * 300.0f) {
                     interior = 1;
@@ -127,6 +213,7 @@ void runtime_maplink_frame(uint64_t frame) {
             memcpy(stable_xyz, xyz, sizeof stable_xyz);
             stable_yaw = yaw;
             have_stable = 1;
+            last_world_save(xyz, yaw, t);
         }
         float ox = interior ? stable_xyz[0] : xyz[0];
         float oy = interior ? stable_xyz[1] : xyz[1];

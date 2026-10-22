@@ -1064,3 +1064,14 @@ int runtime_gateway_publish(const char *json, size_t length) {
 }
 
 int runtime_gateway_port(void) { return gw_port; }
+
+/* Latest save position (world coordinates, read-only). Used by the maplink producer to bootstrap the interior-scene
+   detection when the game starts with the player already inside a shrine (no previous world sample to compare). */
+int runtime_gateway_latest_position(double xyz[3]) {
+    SaveEntry entries[GW_SAVE_MAX_SLOTS];
+    int count = collect_saves(entries, GW_SAVE_MAX_SLOTS);
+    if (count <= 0) return 0;
+    SaveEntry *latest = &entries[0];
+    for (int i = 1; i < count; i++) if (entries[i].mtime > latest->mtime) latest = &entries[i];
+    return parse_save_position(latest->path, xyz) == 0 ? 1 : 0;
+}

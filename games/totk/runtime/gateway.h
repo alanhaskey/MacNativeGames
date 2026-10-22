@@ -10,3 +10,4 @@ void runtime_gateway_stop(void);
 /* Called by runtime/maplink.c on every sample: the latest position JSON (one line) becomes the served snapshot. */
 int runtime_gateway_publish(const char *json, size_t length);
 int runtime_gateway_port(void);
+int runtime_gateway_latest_position(double xyz[3]);

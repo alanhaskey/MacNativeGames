@@ -32,6 +32,7 @@ void runtime_maplink_frame(uint64_t frame) { (void)frame; }
 extern int runtime_world_ready(void);
 static int world_latch;
 static int interior;                 /* inside a separate scene (shrine/divine beast): local coordinates near the origin */
+static int seeded;                   /* first world sample consumed: bootstrap interior detection from the latest save */
 static int have_stable;
 static float stable_xyz[3];
 static double stable_yaw;
@@ -86,7 +87,27 @@ void runtime_maplink_frame(uint64_t frame) {
            teleports the raw player position from world coordinates to something like (0.6, -13, -24). A map cannot
            place that point, so remember the last world position and present it as frozen while the scene is local.
            Entry heuristic: a jump far too large for walking (>300 m between samples) into the small local area.
-           Exit heuristic: the raw position leaves the local area again. */
+           Bootstrap: when the game starts with the player already inside a shrine there is no previous sample, so
+           compare the first local sample with the latest save position and freeze that instead.
+           Exit heuristic: the raw position leaves the local area, or returns to the frozen spot (shrine entrance). */
+        int near_origin = fabsf(xyz[0]) < 400.0f && fabsf(xyz[2]) < 400.0f;
+        if (!seeded) {
+            seeded = 1;
+            double save_xyz[3];
+            if (near_origin && runtime_gateway_latest_position(save_xyz)) {
+                float dx = xyz[0] - (float)save_xyz[0], dz = xyz[2] - (float)save_xyz[2];
+                if (dx * dx + dz * dz > 300.0f * 300.0f) {
+                    interior = 1;
+                    stable_xyz[0] = (float)save_xyz[0];
+                    stable_xyz[1] = (float)save_xyz[1];
+                    stable_xyz[2] = (float)save_xyz[2];
+                    stable_yaw = yaw;
+                    have_stable = 1;
+                    fprintf(stderr, "[maplink] started inside an interior scene; frozen world position %.1f, %.1f, %.1f\n",
+                            stable_xyz[0], stable_xyz[1], stable_xyz[2]);
+                }
+            }
+        }
         if (!interior && have_stable) {
             float dx = xyz[0] - stable_xyz[0], dz = xyz[2] - stable_xyz[2];
             if (dx * dx + dz * dz > 300.0f * 300.0f && fabsf(xyz[0]) < 400.0f && fabsf(xyz[2]) < 400.0f) {
@@ -95,9 +116,12 @@ void runtime_maplink_frame(uint64_t frame) {
                         stable_xyz[0], stable_xyz[1], stable_xyz[2]);
             }
         }
-        if (interior && (fabsf(xyz[0]) > 400.0f || fabsf(xyz[2]) > 400.0f)) {
-            interior = 0;
-            fprintf(stderr, "[maplink] back in world at %.1f, %.1f, %.1f\n", xyz[0], xyz[1], xyz[2]);
+        if (interior) {
+            float dx = xyz[0] - stable_xyz[0], dz = xyz[2] - stable_xyz[2];
+            if (!near_origin || dx * dx + dz * dz < 30.0f * 30.0f) {
+                interior = 0;
+                fprintf(stderr, "[maplink] back in world at %.1f, %.1f, %.1f\n", xyz[0], xyz[1], xyz[2]);
+            }
         }
         if (!interior) {
             memcpy(stable_xyz, xyz, sizeof stable_xyz);

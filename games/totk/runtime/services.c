@@ -197,6 +197,9 @@ static uint64_t alias_map(int unmap,uint64_t addr,uint64_t size){
 uint64_t runtime_heap_base(void){return (uintptr_t)heap;}
 /* Guest memory the game has committed (heap size + mapped alias pages), for memory reports (iOS app monitor). */
 void runtime_guest_committed(uint64_t *heap_bytes,uint64_t *alias_mapped){*heap_bytes=heap_size;*alias_mapped=alias_bytes;}
+/* Read-only discovery for the diagnostic memory scanner: where the guest heap and alias space live. */
+void runtime_guest_regions(uintptr_t *heap_base,uint64_t *heap_bytes,uintptr_t *alias_base,uint64_t *alias_size_out){
+ *heap_base=(uintptr_t)heap;*heap_bytes=heap_size;*alias_base=(uintptr_t)alias_space;*alias_size_out=alias_len;}
 /* Physical memory behind the guest regions (stack+heap and alias): resident pages, of which dirty, and pages the system
    compressed. Committed sizes overstate what the game uses; these are what count against the iOS memory limit. */
 static void region_pages(uint64_t a,uint64_t end,uint64_t *resident,uint64_t *dirty,uint64_t *compressed){

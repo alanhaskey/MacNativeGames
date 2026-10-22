@@ -623,6 +623,240 @@ static void read_target_file(void) {
            ms_have_target ? ms_target_id : 0ULL, ms_target_hash, ms_have_target_xyz ? "set" : "none");
 }
 
+/* Full guest-memory page diff: dump every readable page before the action, then after the action find pages
+   whose content changed but stayed stable for >1.2 s (animation pages keep changing and are excluded).
+   For each persistent page the changed dwords are logged, which reveals where a flag value lives. */
+#define PD_PAGE 4096
+#define PD_CHUNK (4u << 20)
+static uintptr_t pd_regions[2];
+static uint64_t pd_sizes[2];
+static int pd_region_count;
+static uint64_t *pd_before;
+static uint64_t *pd_after;
+static uint32_t pd_pages;
+static FILE *pd_file;
+static uint64_t pd_data_start[2];
+
+static uint64_t pd_hash(const unsigned char *p, size_t n) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= 0x100000001b3ULL; }
+    return h;
+}
+
+static uint64_t pd_page_count(void) {
+    uint64_t n = 0;
+    for (int r = 0; r < pd_region_count; r++) n += (pd_sizes[r] + PD_PAGE - 1) / PD_PAGE;
+    return n;
+}
+
+static int pd_dump_before(void) {
+    runtime_guest_regions(&pd_regions[0], &pd_sizes[0], &pd_regions[1], &pd_sizes[1]);
+    pd_region_count = 2;
+    pd_pages = (uint32_t)pd_page_count();
+    pd_before = calloc(pd_pages, 8);
+    if (!pd_before) return 0;
+    const char *profile = getenv("TOTK_PROFILE_DIR");
+    char path[PATH_MAX];
+    snprintf(path, sizeof path, "%s/../memscan.pagedump.bin", profile ? profile : ".");
+    pd_file = fopen(path, "wb");
+    if (!pd_file) { ms_log("pagediff: cannot open dump"); return 0; }
+    uint64_t header = 0x5041474544494646ULL; /* "PAGEDIFF" */
+    fwrite(&header, 8, 1, pd_file);
+    fwrite(&pd_region_count, 4, 1, pd_file);
+    uint64_t offset = 8 + 4 + 8 * 2 * 2;
+    for (int r = 0; r < pd_region_count; r++) {
+        fwrite(&pd_regions[r], 8, 1, pd_file); fwrite(&pd_sizes[r], 8, 1, pd_file);
+        pd_data_start[r] = offset; offset += pd_sizes[r];
+    }
+    unsigned char *buffer = malloc(PD_CHUNK);
+    uint32_t page = 0;
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (int r = 0; r < pd_region_count && buffer; r++) {
+        uint64_t limit = pd_sizes[r];
+        for (uint64_t off = 0; off < limit; off += PD_CHUNK) {
+            size_t want = (size_t)((limit - off) < PD_CHUNK ? (limit - off) : PD_CHUNK);
+            mach_vm_size_t got = 0;
+            if (mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)(pd_regions[r] + off), (mach_vm_size_t)want,
+                                       (mach_vm_address_t)(uintptr_t)buffer, &got) != KERN_SUCCESS || got == 0) {
+                memset(buffer, 0, want);
+                got = want;
+                for (size_t pageoff = 0; pageoff < want; pageoff += PD_PAGE) pd_before[page++] = 0;
+            } else {
+                for (size_t pageoff = 0; pageoff < (size_t)got; pageoff += PD_PAGE)
+                    pd_before[page++] = got - pageoff >= PD_PAGE ? pd_hash(buffer + pageoff, PD_PAGE) : 0;
+            }
+            fwrite(buffer, 1, (size_t)got, pd_file);
+        }
+    }
+    free(buffer);
+    fclose(pd_file); pd_file = NULL;
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    ms_log("pagediff before: %u pages, dump %.1f s", pd_pages, (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9);
+    return 1;
+}
+
+static int pd_hash_live(uint64_t *out) {
+    unsigned char *buffer = malloc(PD_CHUNK);
+    if (!buffer) return 0;
+    uint32_t page = 0;
+    for (int r = 0; r < pd_region_count; r++) {
+        for (uint64_t off = 0; off < pd_sizes[r]; off += PD_CHUNK) {
+            size_t want = (size_t)((pd_sizes[r] - off) < PD_CHUNK ? (pd_sizes[r] - off) : PD_CHUNK);
+            mach_vm_size_t got = 0;
+            if (mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)(pd_regions[r] + off), (mach_vm_size_t)want,
+                                       (mach_vm_address_t)(uintptr_t)buffer, &got) != KERN_SUCCESS || got == 0) {
+                got = want; memset(buffer, 0, want);
+                for (size_t pageoff = 0; pageoff < want; pageoff += PD_PAGE) out[page++] = 0;
+            } else {
+                for (size_t pageoff = 0; pageoff < (size_t)got; pageoff += PD_PAGE)
+                    out[page++] = got - pageoff >= PD_PAGE ? pd_hash(buffer + pageoff, PD_PAGE) : 0;
+            }
+        }
+    }
+    free(buffer);
+    return 1;
+}
+
+static void pd_diff_after(void) {
+    if (!pd_before) { ms_log("pagediff after: no before snapshot"); return; }
+    pd_after = calloc(pd_pages, 8);
+    if (!pd_after) return;
+    pd_hash_live(pd_after);
+    usleep(1200000);
+    uint64_t *stable = calloc(pd_pages, 8);
+    if (!stable) { free(pd_after); return; }
+    pd_hash_live(stable);
+    /* reopen dump for before-page bytes */
+    const char *profile = getenv("TOTK_PROFILE_DIR");
+    char path[PATH_MAX];
+    snprintf(path, sizeof path, "%s/../memscan.pagedump.bin", profile ? profile : ".");
+    FILE *dump = fopen(path, "rb");
+    int persistent = 0;
+    uint32_t page = 0;
+    for (int r = 0; r < pd_region_count; r++) {
+        uint64_t limit = pd_sizes[r];
+        for (uint64_t off = 0; off < limit; off += PD_PAGE, page++) {
+            if (!pd_before[page] || !pd_after[page] || !stable[page]) continue;
+            if (pd_before[page] == pd_after[page]) continue;
+            if (pd_after[page] != stable[page]) continue; /* still changing: animation */
+            persistent++;
+            if (persistent > 40) continue;
+            unsigned char before_page[PD_PAGE], after_page[PD_PAGE];
+            int have_before = 0;
+            if (dump && fseek(dump, (long)(pd_data_start[r] + off), SEEK_SET) == 0 &&
+                fread(before_page, 1, PD_PAGE, dump) == PD_PAGE) have_before = 1;
+            mach_vm_size_t got = 0;
+            if (mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)(pd_regions[r] + off), PD_PAGE,
+                                       (mach_vm_address_t)(uintptr_t)after_page, &got) != KERN_SUCCESS || got != PD_PAGE) continue;
+            ms_log("pagediff persistent page %#llx (region %d offset %#llx%s)", (unsigned long long)(pd_regions[r] + off), r,
+                   (unsigned long long)off, have_before ? "" : ", no before data");
+            int shown = 0;
+            for (int i = 0; have_before && i + 4 <= PD_PAGE && shown < 10; i += 4) {
+                unsigned b = read_u32(before_page + i), a = read_u32(after_page + i);
+                if (b == a) continue;
+                ms_log("  page %#llx +%#x: 0x%08X -> 0x%08X", (unsigned long long)(pd_regions[r] + off), i, b, a);
+                shown++;
+            }
+        }
+    }
+    if (dump) fclose(dump);
+    ms_log("pagediff after: %d persistent changed pages", persistent);
+    free(stable); free(pd_after); pd_after = NULL;
+}
+
+/* Index/value array search: the GameData node holds  hash -> small index.  If the game keeps an array of
+   values indexed by that id, then for known flags (id, expected value) we can find its base by searching for
+   the two known 1-valued indices 8 bytes apart (15621 / 15623) and verifying the other pairs. */
+static unsigned vs_ids[16];
+static unsigned vs_expect[16];
+static int vs_count;
+
+static void vs_parse(void) {
+    vs_count = 0;
+    const char *spec = getenv("TOTK_MEMSCAN_VALUES");
+    if (!spec || !*spec) return;
+    char copy[512];
+    snprintf(copy, sizeof copy, "%s", spec);
+    char *saveptr = NULL;
+    for (char *token = strtok_r(copy, ",", &saveptr); token && vs_count < 16; token = strtok_r(NULL, ",", &saveptr)) {
+        char *colon = strchr(token, ':');
+        if (!colon) continue;
+        *colon = 0;
+        vs_ids[vs_count] = (unsigned)strtoul(token, NULL, 10);
+        vs_expect[vs_count] = (unsigned)strtoul(colon + 1, NULL, 16);
+        vs_count++;
+    }
+}
+
+static int vs_read_u32(uintptr_t address, unsigned *out) {
+    mach_vm_size_t got = 0;
+    return mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)address, 4, (mach_vm_address_t)(uintptr_t)out, &got) == KERN_SUCCESS && got == 4;
+}
+
+static void vs_search(void) {
+    vs_parse();
+    if (vs_count < 3) { ms_log("valuesearch: need >=3 id:hex pairs"); return; }
+    uintptr_t heap = 0, alias = 0;
+    uint64_t heap_size = 0, alias_size = 0;
+    runtime_guest_regions(&heap, &heap_size, &alias, &alias_size);
+    uintptr_t regions[2] = {heap, alias};
+    uint64_t sizes[2] = {heap_size, alias_size};
+    unsigned anchor_id = vs_ids[0], anchor_expect = vs_expect[0];
+    unsigned second_id = vs_ids[1], second_expect = vs_expect[1];
+    long long second_delta = (long long)second_id * 4 - (long long)anchor_id * 4;
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    unsigned char *buffer = malloc(PD_CHUNK);
+    int candidates = 0;
+    uint64_t scanned = 0;
+    for (int r = 0; r < 2 && buffer; r++) {
+        for (uint64_t off = 0; off < sizes[r]; off += PD_CHUNK) {
+            size_t want = (size_t)((sizes[r] - off) < PD_CHUNK ? (sizes[r] - off) : PD_CHUNK);
+            mach_vm_size_t got = 0;
+            if (mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)(regions[r] + off), (mach_vm_size_t)want,
+                                       (mach_vm_address_t)(uintptr_t)buffer, &got) != KERN_SUCCESS || got == 0)
+                continue;
+            scanned += got;
+            for (size_t i = 0; i + 4 <= (size_t)got; i += 4) {
+                unsigned v = read_u32(buffer + i);
+                if (v != anchor_expect) continue;
+                uintptr_t anchor = regions[r] + off + i;
+                unsigned second = 0;
+                if (!vs_read_u32((uintptr_t)((long long)anchor + second_delta), &second) || second != second_expect) continue;
+                uintptr_t base = anchor - (uintptr_t)anchor_id * 4;
+                int matches = 0, checked = 0;
+                for (int k = 0; k < vs_count; k++) {
+                    unsigned value = 0;
+                    if (!vs_read_u32(base + (uintptr_t)vs_ids[k] * 4, &value)) continue;
+                    checked++;
+                    if (vs_ids[k] == 5670u) { if (value < 24) matches++; continue; }
+                    if (vs_ids[k] == 5671u) { if (value < 60) matches++; continue; }
+                    if (value == vs_expect[k]) matches++;
+                }
+                if (checked >= 3 && matches >= vs_count - 1) {
+                    candidates++;
+                    if (candidates <= 20) {
+                        char values[256];
+                        size_t used = 0;
+                        for (int k = 0; k < vs_count && used + 16 < sizeof values; k++) {
+                            unsigned value = 0;
+                            vs_read_u32(base + (uintptr_t)vs_ids[k] * 4, &value);
+                            used += (size_t)snprintf(values + used, sizeof values - used, "%u:%u ", vs_ids[k], value);
+                        }
+                        ms_log("valuesearch candidate base %#llx (scanned %llu MiB): %s", (unsigned long long)base,
+                               (unsigned long long)(scanned >> 20), values);
+                    }
+                }
+            }
+        }
+    }
+    free(buffer);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    ms_log("valuesearch done: %d candidates in %.1f s", candidates,
+           (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9);
+}
+
 static void *snapshot_thread(void *unused) {
     (void)unused;
     char before[PATH_MAX], after[PATH_MAX];
@@ -632,11 +866,25 @@ static void *snapshot_thread(void *unused) {
         struct stat st;
         if (stat(after, &st) == 0) {
             remove(after);
-            diff_snapshot();
+            if (getenv("TOTK_MEMSCAN_PAGEDIFF") && *getenv("TOTK_MEMSCAN_PAGEDIFF")) pd_diff_after(); else diff_snapshot();
             continue;
         }
         if (stat(before, &st) == 0) {
             remove(before);
+            if (getenv("TOTK_MEMSCAN_VALUESEARCH") && *getenv("TOTK_MEMSCAN_VALUESEARCH")) {
+                float vxyz[3];
+                int inw = runtime_survey_player(vxyz, NULL) && (vxyz[0] * vxyz[0] + vxyz[2] * vxyz[2] > 4.0f);
+                if (!inw) { ms_log("valuesearch before while at menu; ignored"); continue; }
+                vs_search();
+                continue;
+            }
+            if (getenv("TOTK_MEMSCAN_PAGEDIFF") && *getenv("TOTK_MEMSCAN_PAGEDIFF")) {
+                float pxyz[3];
+                int inw = runtime_survey_player(pxyz, NULL) && (pxyz[0] * pxyz[0] + pxyz[2] * pxyz[2] > 4.0f);
+                if (!inw) { ms_log("pagediff before while at menu; ignored"); continue; }
+                pd_dump_before();
+                continue;
+            }
             float xyz[3];
             int in_world = runtime_survey_player(xyz, NULL) && (xyz[0] * xyz[0] + xyz[2] * xyz[2] > 4.0f);
             if (!in_world) { ms_log("before trigger while at menu; ignored"); continue; }
@@ -678,6 +926,8 @@ static void *scan_thread(void *unused) {
         int in_world = runtime_survey_player(xyz, NULL) && (xyz[0] * xyz[0] + xyz[2] * xyz[2] > 4.0f);
         if (!in_world) {
             ms_log("menu placeholder position; watching skipped, waiting for trigger/next scan");
+        } else if (getenv("TOTK_MEMSCAN_NOWATCH") && *getenv("TOTK_MEMSCAN_NOWATCH")) {
+            ms_log("probe-only scan done; waiting for next trigger");
         } else {
             if (ms_have_target && ms_target_hit_count > 0) {
                 /* Pick the hit whose neighbourhood holds the expected world position (the actor struct). */

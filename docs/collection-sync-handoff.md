@@ -45,8 +45,8 @@ TOTK.app ──(127.0.0.1:17862, 随游戏启动/退出)──> wiki/连接器
       "value": 1,
       "map": {"0x5F6180D7": "<wiki markerId>", "...": "..."}
     },
-    "shrines_status": {"kind": "flag", "value": "Clear", "map": {"0x03B85CAE": "..."}},
-    "travel_koroks":  {"kind": "flag", "value": "Clear", "map": {"0x...": "..."}},
+    "shrines_status": {"kind": "flag", "value": "Clear", "valueHash": 1654019904, "map": {"0x03B85CAE": "..."}},
+    "travel_koroks":  {"kind": "flag", "value": "Clear", "valueHash": 1654019904, "map": {"0x...": "..."}},
     "chests":         {"kind": "guid", "map": {"0xF026D163D19391C5": "..."}}
   }
 }
@@ -89,10 +89,32 @@ TOTK.app ──(127.0.0.1:17862, 随游戏启动/退出)──> wiki/连接器
 | `GET /v1/save/slots` | 存档槽位列表 |
 | `GET /v1/save/summary?slot=latest` | 最近存档摘要（位置/时间）|
 | `GET /v1/save/state?slot=latest` | **解析后的存档**：`flags:[[hash,value],...]`（只含非 0）、`guids:["0x...",...]`、`position`、`gameTime`、`counts`、`seq` |
-| `GET /v1/save/delta?since=<seq>` | 相邻存档增量：`added/changed/removed`、`newGuids`、`intervalMs`、`position`、`gameTime` |
+| `GET /v1/save/delta?since=<seq>` | 相邻存档增量（元素结构见 §3.1）；`delta` 也会刷新最新存档 |
 
 `/v1/save/state` 约 120 KB（保存 5000+ 个非零 flag），首次拉取后建议缓存，之后用 delta 更新。
 存档正在写入时返回 409 `save-busy`，重试即可；菜单/未进世界也能读（读的是磁盘文件）。
+
+### 3.1 delta 元素结构（务必按对象解析）
+
+```json
+{"seq":6,"slot":"00","savedAtMs":1792631681458,"intervalMs":194783,
+ "position":{"x":459.894,"y":1549.955,"z":1698.868},
+ "gameTime":{"hour":1,"minute":38},
+ "added":[{"hash":"0x8899AABB","from":0,"to":1}],
+ "changed":[{"hash":"0x2106FA19","from":30,"to":38}],
+ "removed":[{"hash":"0x11223344","from":1,"to":0}],
+ "newGuids":["0x44FCEE2B3F9BAB36"],
+ "counts":{"added":1,"changed":1,"removed":1,"newGuids":1}}
+```
+
+- 三个数组的元素都是对象 `{hash, from, to}`；`added.from = 0`，`removed.to = 0`；
+- `changed` 包含"非 0 → 0"（`to: 0`）；
+- 判定完成用 **`to`**；按 `seq` 升序合并；
+- 没有新存档：`seq` 不变、`deltas: []`（正常）；
+- `slot` 是产生该增量的那次存档槽位，可能比当前 `state?slot=latest` 旧（后来又有新存档时）；
+  `state?slot=latest` 始终是当前最新；两者配合：全量校正 + 增量推进；
+- 阶段值：`hash('Clear') = 0x62965740`（神庙状态、旅行克洛格），
+  `hash('Complete') = 0x4C0A63F4`（任务完成），`hash('NotClear') = 0x8729BFA5`（旅行克洛格初始非零值）。
 
 ## 4. 接入步骤（建议实现）
 
@@ -150,7 +172,7 @@ python3 games/totk/scripts/diag/build_save_marker_map.py \
 | 鸟望台 / 破魔之根 / 龙之泪 | 15 / 120 / 12 | 高（坐标 0–1m）|
 | 洞窟 / 深穴 / 井 | 171 / 35 / 58 个点（每点 2 key）| 高（池边洞窟 key 实测命中）|
 | 隐藏克洛格 | 800 | 高（800/800 公式命中 + 实测坐标）|
-| 旅行克洛格 | 100 | **中**（顺序映射，未逐条实机验证）|
+| 旅行克洛格 | 100 | **中**（顺序映射；连接器实测完成值 `0x62965740`=`hash('Clear')`，与映射一致）|
 | 宝箱 | 1344 key → 1236 标记 | 高（实测"琥珀"开箱 GUID→`chest:Treasure0094` 距离 0.0）|
 | 魔犹伊 / 卡邦达 / 贤者遗志 | 147 / 81 / 20 | 高（实测魔犹伊 GUID 命中）|
 

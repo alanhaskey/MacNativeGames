@@ -187,7 +187,7 @@
 | 端点 | 返回 |
 |---|---|
 | `GET /v1/save/state?slot=latest` | `{ok, slot, savedAtMs, seq, position{x,y,z}, gameTime{hour,minute}, flags:[[hash,value],...], guids:[...], counts{flags,nonzero,guids}}` |
-| `GET /v1/save/delta?since=<seq>` | `{ok, seq, deltas:[{seq,slot,savedAtMs,intervalMs,position,gameTime,added[],changed[],removed[],newGuids[],counts}]}` |
+| `GET /v1/save/delta?since=<seq>` | `{ok, seq, deltas:[...]}`，元素结构见下 |
 
 示例（截断）：
 
@@ -207,19 +207,56 @@
 - `guids` 是存档 GUID 数组（魔犹伊/遗志/卡邦达/宝箱等对象实例），按存档顺序。
 - `delta` 只在解析到**新的最新存档**时生成（最多保留 8 条）；`since` 为上次收到的 `seq`；
   跨槽位不会误报。`intervalMs` 供消费者判断增量是否"干净"（窗口越长越可能混合多个事件）。
+- `/v1/save/delta` 与 `/v1/save/state` 都会刷新"最新存档"；**只轮询 delta 也能发现新存档**。
+- 没有新存档时：`seq` 不变，`deltas` 为空数组（正常结果，不是错误）。
+
+### 6.5.1 delta 元素的精确结构
+
+三个数组的元素都是**对象**（2026-10-22 后的构建；更早的构建 `added` 用 `{hash,value}`）：
+
+```json
+{
+  "seq": 6, "slot": "00", "savedAtMs": 1792631681458, "intervalMs": 194783,
+  "position": {"x":459.894,"y":1549.955,"z":1698.868},
+  "gameTime": {"hour":1,"minute":38},
+  "added":   [{"hash":"0x8899AABB","from":0,"to":1}],
+  "changed": [{"hash":"0x2106FA19","from":30,"to":38}],
+  "removed": [{"hash":"0x11223344","from":1,"to":0}],
+  "newGuids": ["0x44FCEE2B3F9BAB36"],
+  "counts": {"added":1,"changed":1,"removed":1,"newGuids":1}
+}
+```
+
+语义：
+
+- `added`：该 key 在上一份存档里**不存在**（注意：存档表里很多 key 默认带 0，所以实际很少见），`from` 恒为 0；
+- `changed`：key 存在但值不同，且至少一侧非 0；**非 0 → 0 也在这里**（`to: 0`）；
+- `removed`：key 上一份存在且非 0、这一份不存在，`to` 恒为 0；
+- **判定"现在是否完成"用 `to`**（同时也可以随时用 `/v1/save/state` 的全量 `flags` 校正）；
+- 按 `seq` 升序合并即可；`slot` 是**产生这条增量那次存档的槽位**，可能比当前 `state?slot=latest`
+  旧（后来又有新存档时），这是正常的；`state?slot=latest` 永远是当前最新。
+
+阶段值（容易混淆）：
+
+| 字符串 | murmur3 值 | 用在哪 |
+|---|---|---|
+| `Clear` | `0x62965740` | 神庙状态、旅行克洛格完成 |
+| `Complete` | `0x4C0A63F4` | 任务/挑战完成（`hash('Step_'+key)`） |
+| `NotClear` | `0x8729BFA5` | 旅行克洛格未完成（初始阶段，非零）|
 - 已实测：1.4.3 存档；类别统计与实机一致（神庙 2/152、克洛格 3/800、洞穴 1/151、井 0/58）。
 - 写入中返回 409 `save-busy`；无存档 `ok:false, reason:"no-save"`。
 
 ## 6.6 收集同步的消费方式（wiki 侧）
 
 1. 加载 `save-marker-map.compact.json`：
-   `categories: {类别: {kind: "flag"|"guid", value: 1|"Clear", map: {存档 key: wiki markerId}}}`；
+   `categories: {类别: {kind: "flag"|"guid", value: 1|"Clear", valueHash: 1|0x62965740, map: {存档 key: wiki markerId}}}`；
 2. 轮询 `GET /v1/save/state?slot=latest`：
-   - `flags`（`"0x%08X" -> value`）：`kind == "flag"` 的类别，**值等于 `value`** 才算完成
-     （`value: 1` 或 `"Clear"`；`"Clear"` = `hash('Clear') = 0x4C0A63F4`）。只"存在"不算；
+   - `flags`（`"0x%08X" -> value`）：`kind == "flag"` 的类别，**值等于 `valueHash`** 才算完成
+     （`1` 或 `0x62965740`）。只"存在"不算；
      例如旅行克洛格/神庙状态在其他阶段也有非零值；
    - `guids`（`"0x%016X"`）：命中宝箱/魔犹伊/卡邦达/贤者遗志的 GUID 即完成；
 3. 需要"刚完成"的实时事件时用 `GET /v1/save/delta?since=<seq>`（间隔长/组大时进人工确认）；
+   建议启动时拉一次全量，之后每 5–10 秒轮询 delta；每 1–5 分钟再拉一次全量做校正；
 4. 未在映射表里的 key 可以忽略（例如成就类旗帜）；不要把位置/时间字段当事件。
 
 ## 7. 轨迹域（trail v1，已实现）

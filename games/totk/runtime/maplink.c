@@ -31,6 +31,10 @@ void runtime_maplink_frame(uint64_t frame) { (void)frame; }
    (the origin, identity rotation) as "in world"; that latch is what the map needs. */
 extern int runtime_world_ready(void);
 static int world_latch;
+static int interior;                 /* inside a separate scene (shrine/divine beast): local coordinates near the origin */
+static int have_stable;
+static float stable_xyz[3];
+static double stable_yaw;
 static char path[PATH_MAX];
 static int enabled, step = 6;
 static uint64_t next_frame;
@@ -78,18 +82,51 @@ void runtime_maplink_frame(uint64_t frame) {
            atan2(forward.x, forward.z). Degrees, clockwise from +Z, which is what a north-up map wants. */
         double yaw = atan2((double)rot[2], (double)rot[8]) * 180.0 / M_PI;
         if (yaw < 0) yaw += 360.0;
+        /* Shrines (and other separate scenes) use their own coordinate space centred on the origin: entering one
+           teleports the raw player position from world coordinates to something like (0.6, -13, -24). A map cannot
+           place that point, so remember the last world position and present it as frozen while the scene is local.
+           Entry heuristic: a jump far too large for walking (>300 m between samples) into the small local area.
+           Exit heuristic: the raw position leaves the local area again. */
+        if (!interior && have_stable) {
+            float dx = xyz[0] - stable_xyz[0], dz = xyz[2] - stable_xyz[2];
+            if (dx * dx + dz * dz > 300.0f * 300.0f && fabsf(xyz[0]) < 400.0f && fabsf(xyz[2]) < 400.0f) {
+                interior = 1;
+                fprintf(stderr, "[maplink] interior scene detected; freezing world position %.1f, %.1f, %.1f\n",
+                        stable_xyz[0], stable_xyz[1], stable_xyz[2]);
+            }
+        }
+        if (interior && (fabsf(xyz[0]) > 400.0f || fabsf(xyz[2]) > 400.0f)) {
+            interior = 0;
+            fprintf(stderr, "[maplink] back in world at %.1f, %.1f, %.1f\n", xyz[0], xyz[1], xyz[2]);
+        }
+        if (!interior) {
+            memcpy(stable_xyz, xyz, sizeof stable_xyz);
+            stable_yaw = yaw;
+            have_stable = 1;
+        }
+        float ox = interior ? stable_xyz[0] : xyz[0];
+        float oy = interior ? stable_xyz[1] : xyz[1];
+        float oz = interior ? stable_xyz[2] : xyz[2];
+        double oyaw = interior ? stable_yaw : yaw;
         /* Layer from height until a game-state signal is found (see docs/next-features-plan.md): surface is roughly
            0..1200 m, the sky islands start above ~1300 m, the Depths are far below sea level. layerSource stays
            "height" so a consumer can also compare the raw y. */
-        int layer = xyz[1] < -500.0f ? -1 : (xyz[1] > 1300.0f ? 1 : 0);
+        int layer = oy < -500.0f ? -1 : (oy > 1300.0f ? 1 : 0);
+        char interior_part[160] = "";
+        if (interior) {
+            snprintf(interior_part, sizeof interior_part,
+                     "\"interior\":true,\"positionSource\":\"frozen\",\"rawPosition\":{\"x\":%.3f,\"y\":%.3f,\"z\":%.3f},",
+                     xyz[0], xyz[1], xyz[2]);
+        }
         snprintf(json, sizeof json,
                  "{\"schema\":\"macnativegames.maplink/1\",\"ok\":true,\"game\":\"totk\",\"version\":\"%s\","
                  "\"frame\":%llu,\"t\":%lld,\"inWorld\":true,\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,\"yaw\":%.1f,"
                  "\"rot\":[%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f],"
-                 "\"layer\":%d,\"layerSource\":\"height\"}\n",
+                 "%s\"layer\":%d,\"layerSource\":\"height\"}\n",
                  TOTK_GAME_VERSION, (unsigned long long)frame, t,
-                 xyz[0], xyz[1], xyz[2], yaw,
-                 rot[0], rot[1], rot[2], rot[3], rot[4], rot[5], rot[6], rot[7], rot[8], layer);
+                 ox, oy, oz, oyaw,
+                 rot[0], rot[1], rot[2], rot[3], rot[4], rot[5], rot[6], rot[7], rot[8],
+                 interior_part, layer);
     } else {
         snprintf(json, sizeof json,
                  "{\"schema\":\"macnativegames.maplink/1\",\"ok\":false,\"game\":\"totk\",\"version\":\"%s\","

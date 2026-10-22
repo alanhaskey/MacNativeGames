@@ -129,6 +129,9 @@
 | `yaw` | number\|null | 朝向；`headingSource` 说明来源（`actor`/`motion`/`unknown`） |
 | `rot` | number[9] | 原始 3×3 旋转（行主序），供精确换算/校准 |
 | `layer` | number\|null | `1` 天空 / `0` 地表 / `-1` 地底 / `null` 不在世界。当前由高度推导（`layerSource:"height"`，阈值：<-500 地底、>1300 天空），消费者可结合 `y` 自行修正 |
+| `interior` | bool | **新增**：为 true 表示玩家在独立场景内（神庙/神兽内部等），此时 `x/y/z` 是**冻结的进入前世界坐标**，由 `positionSource:"frozen"` 标识；`rawPosition` 给出内部本地坐标（不可用于大地图定位） |
+| `positionSource` | string | `live`（正常世界坐标）或 `frozen`（内部场景期间冻结世界坐标） |
+| `rawPosition` | object | 仅 `interior:true` 时出现：内部场景的原始本地坐标（供调试/未来识别具体神庙） |
 
 网关端点（已实现）：
 

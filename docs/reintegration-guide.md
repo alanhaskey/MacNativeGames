@@ -121,6 +121,8 @@
 | `yaw` | 度，0 = +Z，90 = +X |
 | `rot` | 3×3 旋转矩阵（行主序 9 个 float） |
 | `layer` | `-1` 地下（y<-500）、`0` 地表、`1` 天空（y>1300）；`layerSource` 恒为 `height` |
+| `interior` / `positionSource` | 进入神庙等独立场景时为 `true` / `"frozen"`：`x/y/z` 保持进入前的世界坐标，**不会瞬移**；`rawPosition` 是内部本地坐标 |
+| 处理建议 | 收到 `interior:true` 时继续使用 `x/y/z`（已冻结）；可显示"神庙内"状态，不要用 `rawPosition` 打点 |
 | `t` | 采集时间（毫秒）；`ageMs` = now - t |
 
 ### 3.4 `GET /v1/save/summary`
@@ -359,6 +361,7 @@ python3 games/totk/scripts/diag/build_save_marker_map.py \
 - [ ] 监听 `gateway.json` 的 `pid`/`startedAt`，变化时重建连接并重新 baseline
 - [ ] 透传 `/v1/save/state` 的 `counts` 便于自检
 - [ ] 错误处理：连接重置返回 404/空 body 时按"能力缺失"降级，不要当作数据错误
+- [ ] 位置转发时把 `interior`/`positionSource` 一并透传；`interior:true` 用 `x/y/z`（已冻结），不要改用 `rawPosition`
 
 ## 8. Wiki 改造清单
 
@@ -400,7 +403,9 @@ data: {"guid":"0xB7B4CD3A87A43E3E","position":{"x":-335.640,"y":129.965,"z":-392
 3. `progress` 事件不带服务端 seq；精确补发请以 `/v1/save/state` 重对齐为准；
 4. SSE 缓冲 256 条，网关重启丢失；
 5. delta 环形 8 条：轮询间隔建议 ≤ 2 s，否则可能错过连续存档；
-6. `/v1/save/state` 的 `flags` 不含零值项；判断"未完成"= 不存在于数组或值为 0。
+6. `/v1/save/state` 的 `flags` 不含零值项；判断"未完成"= 不存在于数组或值为 0；
+7. 内部场景识别是启发式（跳跃 >300m 且落在原点 ±400m 附近）；极端情况（神庙入口本身在世界原点附近）可能检测不到，此时坐标只会略有偏差；
+8. `interior:true` 时 `rawPosition` 是内部本地坐标，**不要用于大地图定位**。
 
 ---
 

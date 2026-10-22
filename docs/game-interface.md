@@ -261,6 +261,8 @@
 
 ## 6.7 即时收集事件（progress.events v1，已实现：SSE）
 
+> 连接器 / wiki 的完整对接流程见 [reintegration-guide.md](reintegration-guide.md)。
+
 `GET /v1/progress/events?since=<seq>`（`text/event-stream`）。这是**内存即时**通道，只覆盖 GUID 类收集物
 （宝箱 / 魔犹伊 / 卡邦达 / 贤者遗志）；flag 类（克洛格/神庙/洞窟/塔/树根/龙之泪/井/深穴）仍走 `/v1/save/delta`。
 

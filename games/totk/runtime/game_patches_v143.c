@@ -5,6 +5,7 @@
 #include "game_version.h"
 #include "gateway.h"
 #include "memscan.h"
+#include "progress_events.h"
 #include "maplink.h"
 #include "world_survey.h"
 #include <stdio.h>
@@ -265,6 +266,7 @@ void runtime_game_patches(Module *m) {
     runtime_maplink_init(m);
     runtime_gateway_start();
     runtime_memscan_start();
+    runtime_progress_events_start();
     if (strcmp(m->name, "main")) runtime_fail("1.4.3 game patches expect main");
     patch_realtime(m);
     patch_output_res(m);

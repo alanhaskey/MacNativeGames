@@ -16,6 +16,7 @@
    wins). The actual URL is published in <data>/gateway.json. See docs/game-interface.md and docs/next-features-plan.md. */
 #include "gateway.h"
 #include "game_version.h"
+#include "progress_events.h"
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
@@ -769,6 +770,33 @@ static int event_send(int fd, const char *name, const char *data) {
     return send_all(fd, "\n\n", 2);
 }
 
+/* SSE: instant collection events (GUID-tracked objects from the in-memory GUID array). */
+static void progress_events_stream(int fd, long long since) {
+    char head[512];
+    int n = snprintf(head, sizeof head,
+                     "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n"
+                     "Cache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n"
+                     "Access-Control-Allow-Origin: *\r\n\r\n");
+    if (n <= 0 || !send_all(fd, head, (size_t)n)) return;
+    char hello[192];
+    snprintf(hello, sizeof hello, "{\"schema\":\"macnativegames.progress.events/1\",\"kinds\":[\"guid\"],"
+                                  "\"since\":%lld}", since);
+    if (!event_send(fd, "hello", hello)) return;
+    long long cursor = since;
+    char json[512];
+    time_t last_ping = time(NULL);
+    while (atomic_load(&gw_running)) {
+        while (progress_events_next(&cursor, json, sizeof json)) {
+            if (!event_send(fd, "progress", json)) return;
+        }
+        if (time(NULL) - last_ping >= 15) {
+            last_ping = time(NULL);
+            if (!send_all(fd, ": ping\n\n", 8)) return;
+        }
+        usleep(100000);
+    }
+}
+
 static void stream_client(int fd) {
     char head[512];
     int n = snprintf(head, sizeof head,
@@ -837,6 +865,8 @@ static void meta_json(char *body, size_t capacity) {
              "\"fields\":[\"position\",\"savedAt\",\"slot\"]},"
              "\"progress\":{\"schema\":\"macnativegames.progress/1\",\"available\":true,"
              "\"state\":true,\"delta\":true,\"fields\":[\"flags\",\"guids\",\"position\",\"gameTime\",\"seq\"]},"
+             "\"events\":{\"schema\":\"macnativegames.progress.events/1\",\"available\":true,"
+             "\"kinds\":[\"guid\"],\"transport\":\"sse\"},"
              "\"control\":{\"available\":false}}}",
              TOTK_GAME_VERSION, GW_GAME, TOTK_GAME_VERSION, gw_port);
 }
@@ -865,6 +895,12 @@ static void *client_thread(void *argument) {
             if (query) { *query = 0; query++; }
             if (!strcmp(target, "/v1/stream")) {
                 stream_client(fd);
+                close(fd);
+                atomic_fetch_sub(&gw_clients, 1);
+                return NULL;
+            }
+            if (!strcmp(target, "/v1/progress/events")) {
+                progress_events_stream(fd, query ? query_int(query, "since", 0, 0, 1000000) : 0);
                 close(fd);
                 atomic_fetch_sub(&gw_clients, 1);
                 return NULL;

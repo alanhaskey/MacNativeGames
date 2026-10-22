@@ -259,6 +259,35 @@
    建议启动时拉一次全量，之后每 5–10 秒轮询 delta；每 1–5 分钟再拉一次全量做校正；
 4. 未在映射表里的 key 可以忽略（例如成就类旗帜）；不要把位置/时间字段当事件。
 
+## 6.7 即时收集事件（progress.events v1，已实现：SSE）
+
+`GET /v1/progress/events?since=<seq>`（`text/event-stream`）。这是**内存即时**通道，只覆盖 GUID 类收集物
+（宝箱 / 魔犹伊 / 卡邦达 / 贤者遗志）；flag 类（克洛格/神庙/洞窟/塔/树根/龙之泪/井/深穴）仍走 `/v1/save/delta`。
+
+流格式：
+```
+event: hello
+data: {"schema":"macnativegames.progress.events/1","kinds":["guid"],"since":0}
+
+event: progress
+data: {"schema":"macnativegames.progress.events/1","t":1792657202132,"kind":"guid",
+       "guid":"0xB7B4CD3A87A43E3E","hasPosition":true,
+       "position":{"x":-335.640,"y":129.965,"z":-392.105},"layer":0}
+```
+- `guid`：16 位十六进制；用映射表 `details.chests/bubbuls/addison/sage_wills` 直接查 markerId/name；
+- `position`/`layer`：收集瞬间的玩家位置（可与映射坐标交叉校验，`distance` 已给）；
+- `t`：毫秒时间戳；`seq` 隐含在推送顺序中（SSE 断线可用 `since=<最后收到的 seq>` 补发，缓冲区 256 条）；
+- 15 秒一次 `: ping` 心跳，客户端应忽略注释行；
+- 实测：开箱瞬间（黄玉 `chest:Treasure0438`）< 1 秒推送，早于自动存档；
+- 可用环境变量 `TOTK_EVENTS=0` 关闭，`TOTK_EVENTS_LOG=1` 写 `events.log` 便于排查。
+
+推荐消费顺序（wiki 侧）：
+1. 启动：`/v1/save/state` 全量对齐 + 订阅 `/v1/progress/events?since=0`；
+2. GUID 事件 → 立即标记并显示位置；
+3. `/v1/save/delta` → 处理 flag 类完成（注意用 `role`：`shrines_found` 只是发现，
+   `shrines_status == hash('Clear')` 才是完成）；
+4. 断线重连：`/v1/save/state` 重新对齐 + `events?since=<seq>`。
+
 ## 7. 轨迹域（trail v1，已实现）
 
 **用途**：在地图上画最近一段路径。**不持久化、不上传**，由网关在内存里累积（重启即清空）。

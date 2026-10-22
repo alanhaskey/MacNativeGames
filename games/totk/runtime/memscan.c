@@ -62,6 +62,13 @@ static int ms_target_hit_count;
 static unsigned char *ms_snap_data;
 static uintptr_t ms_snap_base;
 static int ms_snap_valid;
+static unsigned char *ms_snap2_data;
+static uintptr_t ms_snap2_base;
+static int ms_snap2_valid;
+static unsigned ms_target_hash;
+static int ms_have_target_hash;
+static unsigned long long ms_target_hash_hits[MS_TARGET_MAX];
+static int ms_target_hash_hit_count;
 #define MS_SNAP_BYTES 4096
 static int ms_guid_count;
 static double ms_last_xyz[3];
@@ -205,6 +212,9 @@ static int load_save_anchors(void) {
             ms_target_xyz[n++] = atof(token);
         ms_have_target_xyz = n == 3;
     }
+    ms_have_target_hash = 0;
+    const char *target_hash = getenv("TOTK_MEMSCAN_TARGET_HASH");
+    if (target_hash && *target_hash) { ms_target_hash = (unsigned)strtoul(target_hash, NULL, 16); ms_have_target_hash = 1; }
     ms_log("save %s: flag anchors %d, guid anchors %d, flag probes %d, target %s%016llX%s", path, ms_flag_count,
            ms_guid_count, ms_probe_count, ms_have_target ? "0x" : "(none) ",
            ms_have_target ? ms_target_id : 0ULL, ms_have_xyz ? "" : " (no position)");
@@ -236,6 +246,15 @@ static void scan_buffer(const unsigned char *buffer, size_t length, uintptr_t ba
             const unsigned char *at = memmem(p, (size_t)(buffer + length - p), needle, 8);
             if (!at) break;
             ms_target_hits[ms_target_hit_count++] = (unsigned long long)(base + (uintptr_t)(at - buffer));
+            p = at + 1;
+        }
+    }
+    if (ms_have_target_hash && ms_target_hash_hit_count < MS_TARGET_MAX) {
+        const unsigned char *p = buffer;
+        while (p + 4 <= buffer + length && ms_target_hash_hit_count < MS_TARGET_MAX) {
+            const unsigned char *at = memmem(p, (size_t)(buffer + length - p), &ms_target_hash, 4);
+            if (!at) break;
+            ms_target_hash_hits[ms_target_hash_hit_count++] = (unsigned long long)(base + (uintptr_t)(at - buffer));
             p = at + 1;
         }
     }
@@ -294,6 +313,7 @@ static void scan_memory(void) {
     memset(ms_probe_hit_count, 0, sizeof ms_probe_hit_count);
     ms_guid_hit_count = 0;
     ms_target_hit_count = 0;
+    ms_target_hash_hit_count = 0;
     uintptr_t heap = 0, alias = 0;
     uint64_t heap_size = 0, alias_size = 0;
     runtime_guest_regions(&heap, &heap_size, &alias, &alias_size);
@@ -313,6 +333,7 @@ static void scan_memory(void) {
     for (int i = 0; i < ms_guid_hit_count && i < 8; i++)
         ms_log("  guid pair hit %#llx", (unsigned long long)ms_guid_hits[i].address);
     if (ms_have_target) ms_log("target 0x%016llX hits %d", ms_target_id, ms_target_hit_count);
+    if (ms_have_target_hash) ms_log("target hash 0x%08X hits %d", ms_target_hash, ms_target_hash_hit_count);
     for (int a = 0; a < ms_probe_count; a++) {
         ms_log("  flag probe 0x%08X hits %d", ms_probe_hashes[a], ms_probe_hit_count[a]);
         for (int k = 0; k < ms_probe_hit_count[a] && k < 6; k++) {
@@ -537,6 +558,22 @@ static void diff_snapshot(void) {
         ms_log("SNAPSHOT DIFF %#llx: 0x%08X -> 0x%08X", (unsigned long long)(ms_snap_base + i), before, after);
     }
     ms_log("snapshot diff done: %d changed dwords (base %#llx)", changes, (unsigned long long)ms_snap_base);
+    if (ms_snap2_valid && ms_snap2_data) {
+        unsigned char current2[MS_SNAP_BYTES];
+        mach_vm_size_t got2 = 0;
+        if (mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)ms_snap2_base, MS_SNAP_BYTES,
+                                   (mach_vm_address_t)(uintptr_t)current2, &got2) == KERN_SUCCESS && got2 == MS_SNAP_BYTES) {
+            int changes2 = 0;
+            for (int i = 0; i + 4 <= MS_SNAP_BYTES; i += 4) {
+                unsigned before = read_u32(ms_snap2_data + i), after = read_u32(current2 + i);
+                if (before == after) continue;
+                changes2++;
+                ms_log("HASH SNAPSHOT DIFF %#llx: 0x%08X -> 0x%08X", (unsigned long long)(ms_snap2_base + i), before, after);
+            }
+            ms_log("hash snapshot diff done: %d changed dwords", changes2);
+            memcpy(ms_snap2_data, current2, MS_SNAP_BYTES);
+        }
+    }
     memcpy(ms_snap_data, current, MS_SNAP_BYTES);
 }
 
@@ -549,6 +586,41 @@ static void snapshot_thread_paths(char *before, size_t bcap, char *after, size_t
         snprintf(before, bcap, "memscan.before");
         snprintf(after, acap, "memscan.after");
     }
+}
+
+/* Optional <data>/memscan.target file lets the orchestrator retarget without restarting the game:
+   lines: id=<decimal instance id>, hash=<hex flag hash>, xyz=<x,y,z> */
+static void read_target_file(void) {
+    const char *profile = getenv("TOTK_PROFILE_DIR");
+    if (!profile || !*profile) return;
+    char path[PATH_MAX];
+    snprintf(path, sizeof path, "%s/../memscan.target", profile);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof line, f)) {
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = 0;
+        char *value = eq + 1;
+        while (*value == ' ') value++;
+        char *end = value + strlen(value);
+        while (end > value && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ')) *--end = 0;
+        if (!strcmp(line, "id")) { ms_target_id = strtoull(value, NULL, 0); ms_have_target = 1; }
+        else if (!strcmp(line, "hash")) { ms_target_hash = (unsigned)strtoul(value, NULL, 16); ms_have_target_hash = 1; }
+        else if (!strcmp(line, "xyz")) {
+            char copy[128];
+            snprintf(copy, sizeof copy, "%s", value);
+            char *saveptr = NULL;
+            int n = 0;
+            for (char *token = strtok_r(copy, ",", &saveptr); token && n < 3; token = strtok_r(NULL, ",", &saveptr))
+                ms_target_xyz[n++] = atof(token);
+            ms_have_target_xyz = n == 3;
+        }
+    }
+    fclose(f);
+    ms_log("target file: id %s%016llX hash 0x%08X xyz %s", ms_have_target ? "0x" : "(none)",
+           ms_have_target ? ms_target_id : 0ULL, ms_target_hash, ms_have_target_xyz ? "set" : "none");
 }
 
 static void *snapshot_thread(void *unused) {
@@ -568,10 +640,22 @@ static void *snapshot_thread(void *unused) {
             float xyz[3];
             int in_world = runtime_survey_player(xyz, NULL) && (xyz[0] * xyz[0] + xyz[2] * xyz[2] > 4.0f);
             if (!in_world) { ms_log("before trigger while at menu; ignored"); continue; }
+            read_target_file();
             if (!load_save_anchors()) { ms_log("before trigger: no anchors"); continue; }
             scan_memory();
             uintptr_t base = locate_target();
             if (base) take_snapshot(base & ~(uintptr_t)0xFF); else ms_log("before trigger: target not located");
+            if (ms_have_target_hash && ms_target_hash_hit_count > 0) {
+                if (!ms_snap2_data) ms_snap2_data = malloc(MS_SNAP_BYTES);
+                uintptr_t hb = (uintptr_t)ms_target_hash_hits[0] & ~(uintptr_t)0xFFF;
+                mach_vm_size_t got2 = 0;
+                if (ms_snap2_data && mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)hb, MS_SNAP_BYTES,
+                        (mach_vm_address_t)(uintptr_t)ms_snap2_data, &got2) == KERN_SUCCESS && got2 == MS_SNAP_BYTES) {
+                    ms_snap2_base = hb;
+                    ms_snap2_valid = 1;
+                    ms_log("hash snapshot taken at %#llx", (unsigned long long)hb);
+                }
+            }
             continue;
         }
         usleep(500000);

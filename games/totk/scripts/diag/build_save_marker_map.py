@@ -314,20 +314,20 @@ def main():
 
     # How a consumer decides "done" for each category.
     expectations = {
-        'shrines_found': {'kind': 'flag', 'value': 1},
-        'shrines_status': {'kind': 'flag', 'value': 'Clear'},
-        'towers': {'kind': 'flag', 'value': 1},
-        'lightroots': {'kind': 'flag', 'value': 1},
-        'dragon_tears': {'kind': 'flag', 'value': 1},
-        'caves': {'kind': 'flag', 'value': 1},
-        'chasms': {'kind': 'flag', 'value': 1},
-        'wells': {'kind': 'flag', 'value': 1},
-        'koroks': {'kind': 'flag', 'value': 1},
-        'travel_koroks': {'kind': 'flag', 'value': 'Clear'},
-        'chests': {'kind': 'guid'},
-        'bubbuls': {'kind': 'guid'},
-        'addison': {'kind': 'guid'},
-        'sage_wills': {'kind': 'guid'},
+        'shrines_found': {'kind': 'flag', 'value': 1, 'role': 'discovered'},
+        'shrines_status': {'kind': 'flag', 'value': 'Clear', 'role': 'completed'},
+        'towers': {'kind': 'flag', 'value': 1, 'role': 'completed'},
+        'lightroots': {'kind': 'flag', 'value': 1, 'role': 'completed'},
+        'dragon_tears': {'kind': 'flag', 'value': 1, 'role': 'completed'},
+        'caves': {'kind': 'flag', 'value': 1, 'role': 'completed'},
+        'chasms': {'kind': 'flag', 'value': 1, 'role': 'completed'},
+        'wells': {'kind': 'flag', 'value': 1, 'role': 'completed'},
+        'koroks': {'kind': 'flag', 'value': 1, 'role': 'completed'},
+        'travel_koroks': {'kind': 'flag', 'value': 'Clear', 'role': 'completed'},
+        'chests': {'kind': 'guid', 'role': 'completed'},
+        'bubbuls': {'kind': 'guid', 'role': 'completed'},
+        'addison': {'kind': 'guid', 'role': 'completed'},
+        'sage_wills': {'kind': 'guid', 'role': 'completed'},
     }
 
     report = {
@@ -353,6 +353,7 @@ def main():
         'source': report['source'],
         'counts': report['counts'],
         'categories': {name: {'kind': expectations.get(name, {}).get('kind', 'flag'),
+                              'role': expectations.get(name, {}).get('role', 'completed'),
                               'value': expectations.get(name, {}).get('value', 1),
                               'valueHash': (1 if expectations.get(name, {}).get('value', 1) == 1
                                             else murmur3_32(expectations.get(name, {}).get('value', 'Clear'))),

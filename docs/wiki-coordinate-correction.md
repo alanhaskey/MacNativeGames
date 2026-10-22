@@ -13,8 +13,8 @@
 | 文件 | 位置 | 内容 | 用途 |
 |---|---|---|---|
 | **权威坐标** | `TOTK_build/analysis/save-map/save-marker-map.json` | `details.<category>.<hash>.position` = **RomFS 放置坐标** `[x, y, z_romfs]`（浮点精度），另有 `markerId/name/entry` | 唯一的坐标来源（其余文件都由它派生） |
-| 对照/QA | `TOTK_build/analysis/save-map/wiki-coordinate-sync.json` | 2974 条：我们的 `game{x,y,z}`、wiki 当前 `game_x/game_z`、`deltaMeters`、`sync`（exact/close/review）、`keys/entries` | 查看每条与 wiki 的差距，人工复核 |
-| **纠正补丁** | `TOTK_build/analysis/save-map/wiki-coordinate-patch.json`（+`.ndjson`） | 2506 个 wiki 标记的 `before → after`（`game_x/game_y/game_z/layer`） | 直接给 wiki 打补丁 |
+| 对照/QA | `TOTK_build/analysis/save-map/wiki-coordinate-sync.json` | 2974 条：我们的 `game{x,y,z}`、wiki 当前 `game_x/game_z`、`deltaMeters`、`sync`（exact/close/review）、`keys/entries` | 查看每条与 wiki 的差距、人工复核 |
+| **纠正补丁** | `TOTK_build/analysis/save-map/wiki-coordinate-patch.json`（+`.ndjson`） | **2822** 个 wiki 标记的 `before → after`（`game_x/game_y/game_z/layer`） | 直接给 wiki 打补丁 |
 
 坐标约定（补丁里 `after` 已转换成 wiki 口径）：
 
@@ -26,6 +26,9 @@ game_z = -RomFS Z
 
 > 注意：`save-marker-map.json` 里存的是 RomFS 原始坐标（z 为负）；补丁已经翻转，wiki 直接使用 `after` 即可。
 
+**匹配方式**：我们的 `markerId` 与 wiki 的 `marker.id` 完全同源，补丁按 **ID 精确匹配**（2974/2974 全部命中），
+不依赖坐标猜配对——不会出现"把破魔之根配到神庙"这类错配。
+
 ---
 
 ## 2. 补丁文件结构
@@ -35,11 +38,17 @@ game_z = -RomFS Z
 ```json
 {
   "schema": "macnativegames.wiki-coordinate-patch/1",
-  "generatedAt": "2026-10-22T08:50:23Z",
+  "generatedAt": "2026-10-22T08:52:26Z",
   "convention": "game_x = RomFS X, game_y = RomFS Y, game_z = -RomFS Z",
-  "stats": { "syncEntries": 2974, "matchedUniqueMarkers": 2506,
-             "ambiguous": 21, "unmatched": 251, "gameYFilled": 11,
-             "recordsChanged": 2004, "byCategory": [ ... ] },
+  "stats": {
+    "syncEntries": 2974,
+    "matchedUniqueMarkers": 2822,
+    "ambiguous": 0,
+    "unmatched": 0,
+    "gameYFilled": 32,
+    "recordsChanged": 2035,
+    "byCategory": [ ... ]
+  },
   "patches": [
     {
       "markerId": "gamertw:addison:Sign000",
@@ -56,46 +65,53 @@ game_z = -RomFS Z
 }
 ```
 
-- `markerId` 用的是 wiki `marker.id`；`sourceId` 是映射表的来源 ID；
-- 神庙的"发现/完成"是同一条 wiki 标记，补丁里合并成一条，`categories: ["shrines_found","shrines_status"]`；
+- `markerId` = wiki `marker.id`；`sourceId` 是映射表来源 ID；
+- 神庙的"发现/完成"是同一标记，补丁合并为一条，`categories: ["shrines_found","shrines_status"]`；
+- 2822 = 2974 条同步记录去掉 152 条神庙 found/status 重复；
 - `wiki-coordinate-patch.ndjson`：每行一个 patch，便于流式导入；
-- `wiki-coordinate-conflicts.json`：`ambiguous`（21 条，多个候选）+ `unmatched`（251 条，wiki 没有对应标记或坐标差太远）。
+- `wiki-coordinate-conflicts.json`：当前为空（`ambiguous: []`、`unmatched: []`），保留结构供将来 ID 缺失时使用。
 
 ### 应用方式（wiki 侧）
 
 按 `markerId` 更新：`game_x = after.game_x`、`game_y = after.game_y`、`game_z = after.game_z`、
 `layer = after.layer`。建议：
 
-1. 先只应用 `sync == "exact"` 的记录（2743 条中的绝大多数）；
-2. `close`（224 条）逐条复核后再应用（`deltaMeters` 已给出）；
-3. `review`（7 条）与 `ambiguous`/`unmatched` 走人工；
+1. 先应用 `sync == "exact"` 的记录（绝大多数）；
+2. `close`（若干）逐条复核后再应用（`deltaMeters` 已给出）；
+3. `review` 与超大修正（见 §3）建议抽样核对后再批量应用；
 4. 应用前备份 `map-content.json`。
 
 ---
 
-## 3. 本次发现的坐标问题（值得注意）
+## 3. 本次纠正的规模（按类别）
 
-| 类别 | 条数 | dY 中位 | dY 范围 | dXZ 最大 | 说明 |
+| 类别 | 条数 | y 缺失 | dY 中位 | dY 范围 | dXZ 最大 |
 |---|---|---|---|---|---|
-| addison 卡邦达 | 81 | **+105.0** | 105.0 ~ 105.0 | 0.0 | wiki y 系统性低 105m |
-| bubbuls 魔犹伊 | 146 | **+119.0** | 118.5 ~ 119.5 | 0.5 | wiki 用了不同节点的 y |
-| koroks 克洛格 | 771 | +95.7 | 91.3 ~ **996.8** | 1.0 | wiki y 不一致（部分差近 1km） |
-| chests 宝箱 | 1050 | +105.0 | -56.9 ~ 143.4 | **44.2** | x/z 也有少量明显偏差 |
-| shrines 神庙 | 78（合并 134） | 0.0 | ~0 | 4.9 | 主要是 x/z 小偏差，另 4 条 y 缺失 |
-| lightroots 树根 | 113 | 0.0 | -830.0 ~ 0.0 | 1.2 | 少数 y 严重错误 |
-| caves/chasms/wells/towers/dragon_tears | 145/31/58/15/12 | ~0 | ~0 | 0~2.2 | 基本准确，补齐 y 即可 |
-| sage_wills 贤者遗志 | 6 | — | — | 13.6 | 6 条 y 缺失 |
+| addison 卡邦达 | 81 | 0 | **+105.0** | 105.0 ~ 105.0 | 0.0 |
+| bubbuls 魔犹伊 | 147 | 0 | **+119.0** | 118.5 ~ 119.5 | 0.5 |
+| caves 洞窟 | 146 | 0 | 0.0 | ~0 | 0.0 |
+| chasms 深穴 | 35 | 1 | 0.0 | ~0 | **48.8** |
+| chests 宝箱 | 1236 | 0 | **+105.0** | -56.9 ~ **+1694.4** | **54.7** |
+| dragon_tears 龙之泪 | 12 | 0 | 0.0 | ~0 | 0.0 |
+| koroks 克洛格 | 800 | 0 | **+95.8** | 91.3 ~ 135.2 | 0.5 |
+| lightroots 树根 | 120 | 1 | 0.0 | ~0 | 0.5 |
+| sage_wills 贤者遗志 | 20 | **20** | — | — | 13.6 |
+| shrines 神庙 | 152 | 10 | 0.0 | ~0 | 15.5 |
+| towers 塔 | 15 | 0 | 0.0 | ~0 | 0.0 |
+| wells 井 | 58 | 0 | 0.0 | ~0 | 0.0 |
 
-> 结论：**多数标记 x/z 只是厘米级偏差，真正的问题是 y（第三轴）**；卡邦达/魔犹伊/克洛格/宝箱有系统性或较大偏差。
+关键结论：
 
-## 4. 未匹配 / 歧义（需要人工）
+- **大多数类别的 x/z 已经准确，真正缺的是 y（第三轴）**；本次补 `game_y` 的记录 32 条（wiki 原本为 null）；
+- 有系统性 y 偏差：卡邦达 **+105m**、魔犹伊 **+119m**、克洛格 **+95.8m**（原先 y 整体偏低）；
+- 少数宝箱/深穴/克洛格存在**大偏差**（宝箱最高 1694m、深穴 48.8m），属于 wiki 数据错误，补丁会修正；
+- 若 wiki 端有对"敌人/地点"等原生标记的坐标也来自同一批数据，可一并参考。
 
-`wiki-coordinate-conflicts.json`：
+## 4. 需要人工复核的项
 
-- `ambiguous` 21 条（宝箱 10、克洛格 6、深穴 4、魔犹伊 1）：坐标容差内出现多个 wiki 标记，需人工选；
-- `unmatched` 251 条：宝箱 172、克洛格 22、**神庙 18**、**贤者遗志 14**、树根 7 等。
-  这些是"游戏里有、wiki 没有对应标记（或坐标差太远）"的对象，可用来补建 wiki 标记；
-  每条带 `game{x,y,z}`、`keys`、`entries`，可直接对照。
+- `sync` 为 `close` / `review` 的记录（少量）：`deltaMeters` 较大，建议抽查；
+- 单项修正超过 200m 的记录（约几十条，主要是宝箱/克洛格/深穴）：建议按 `keys/entries` 核对是哪件物品后再应用；
+- `wiki-coordinate-conflicts.json` 目前为空；若将来 `markerId` 对不上，会出现在 `unmatched` 里，可人工补 ID。
 
 ## 5. 重新生成
 

@@ -36,11 +36,46 @@ NDJSON_PATH = ANALYSIS / "wiki-coordinate-patch.ndjson"
 CONFLICTS_PATH = ANALYSIS / "wiki-coordinate-conflicts.json"
 SUMMARY_PATH = ANALYSIS / "wiki-coordinate-patch-summary.md"
 
-MATCH_TOLERANCE = 1.5  # meters, wiki stores roughly integer game coordinates
+# wiki marker ids are prefixed by object family; use it to disambiguate shrines (Dungeon:)
+# from lightroots (CheckPoint:) which share x/z but live on different layers.
+PREFIX_BY_CATEGORY = {
+    "shrines_found": ("Dungeon",),
+    "shrines_status": ("Dungeon",),
+    "lightroots": ("CheckPoint",),
+    "chasms": ("Chasm",),
+    "caves": ("Cave",),
+    "dragon_tears": ("DragonTears",),
+    "wells": ("Well", "gamertw"),
+    "towers": ("Tower", "gamertw"),
+    "koroks": ("gamertw", "objmap-totk"),
+    "chests": ("gamertw", "objmap-totk"),
+    "bubbuls": ("gamertw", "objmap-totk"),
+    "addison": ("gamertw",),
+    "sage_wills": ("gamertw", "objmap-totk"),
+}
+# Categories that always live on a fixed layer regardless of the y heuristic.
+CATEGORY_LAYER = {
+    "lightroots": -1,
+    "chasms": 0,   # wiki marks the surface chasm entrance
+    "shrines_found": 0,
+    "shrines_status": 0,
+    "towers": 0,
+    "dragon_tears": 0,
+    "wells": 0,
+    "caves": 0,
+}
 
 
 def layer_of(y: float) -> int:
-    return -1 if y < -500 else (1 if y > 1300 else 0)
+    return -1 if y < -200 else (1 if y > 1300 else 0)
+
+
+def target_layer(entry: dict) -> int:
+    return CATEGORY_LAYER.get(entry["category"], layer_of(entry["game"]["y"]))
+
+
+def marker_prefix(marker: dict) -> str:
+    return str(marker.get("id") or "").split(":")[0]
 
 
 def marker_layer(m: dict) -> int | None:
@@ -62,40 +97,21 @@ def main() -> int:
     matched: list[tuple[dict, dict]] = []
     ambiguous: list[dict] = []
     unmatched: list[dict] = []
+    wiki_by_id = {m.get("id"): m for m in wiki_markers if m.get("id")}
     for entry in sync:
-        wiki_x, wiki_z = entry["wiki"]["game_x"], entry["wiki"]["game_z"]
-        candidates: list[dict] = []
-        for dx in (-1, 0, 1):
-            for dz in (-1, 0, 1):
-                for marker in index.get((round(wiki_x) + dx, round(wiki_z) + dz), []):
-                    if abs(marker["game_x"] - wiki_x) <= MATCH_TOLERANCE and abs(marker["game_z"] - wiki_z) <= MATCH_TOLERANCE:
-                        candidates.append(marker)
-        target_layer = layer_of(entry["game"]["y"])
-        candidates = [m for m in candidates if marker_layer(m) in (None, target_layer)]
-        if len(candidates) == 1:
-            matched.append((entry, candidates[0]))
-        elif len(candidates) > 1:
-            ambiguous.append({
-                "sourceId": entry["sourceId"],
-                "category": entry["category"],
-                "name": entry.get("name"),
-                "game": entry["game"],
-                "candidates": [
-                    {"id": m.get("id"), "name": m.get("name"), "category": m.get("category"),
-                     "layer": m.get("layer"), "game_x": m.get("game_x"), "game_y": m.get("game_y"),
-                     "game_z": m.get("game_z")}
-                    for m in candidates
-                ],
-            })
-        else:
+        marker = wiki_by_id.get(entry.get("markerId"))
+        if marker is None:
             unmatched.append({
                 "sourceId": entry["sourceId"],
+                "markerId": entry.get("markerId"),
                 "category": entry["category"],
                 "name": entry.get("name"),
                 "game": entry["game"],
                 "keys": entry.get("keys", []),
                 "entries": entry.get("entries", []),
             })
+        else:
+            matched.append((entry, marker))
 
     # Deduplicate by wiki marker id (shrines appear twice: found + status; keep one, merge categories).
     by_marker: dict[str, dict] = {}
@@ -209,7 +225,7 @@ def main() -> int:
         "# Wiki 坐标纠正补丁摘要",
         "",
         f"- 生成时间：{patch_doc['generatedAt']}",
-        f"- 同步条目：{len(sync)}；唯一匹配 wiki 标记：**{len(patches)}**；"
+        f"- 同步条目：{len(sync)}；按 markerId 精确匹配到 wiki 标记：**{len(patches)}**；"
         f"歧义：{len(ambiguous)}；未匹配：{len(unmatched)}",
         f"- 补 `game_y` 的记录：{y_filled}；坐标实际变化（>0.5m）：{changed_xyz}",
         "",

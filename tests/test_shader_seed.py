@@ -52,6 +52,20 @@ class ShaderInventory(unittest.TestCase):
         self.assertEqual(seed.control_key_len(bytes(0x20)+struct.pack('<I', 0x88c)+bytes(0x860)), 0x880)   # 0x88c: hashed as 0x880
         self.assertEqual(seed.control_key_len(bytes(0x20)+struct.pack('<I', 0x7d1)+bytes(0x860)), 0x7d1)
         self.assertEqual(seed.control_key_len(bytes(0x20)+struct.pack('<I', 0x848)+bytes(0x860)), 0x848)
+        def flagged(size, flag):   # a section with this size word and +0x718
+            c = bytearray(0x880); c[0x20:0x24] = struct.pack('<I', size); c[0x718] = flag; return bytes(c)
+        self.assertTrue(seed.early_fragment_tests('ps', flagged(0x880, 1)))
+        self.assertTrue(seed.early_fragment_tests('ps', flagged(0, 1)))               # no size word: the 0x880 layout too
+        self.assertFalse(seed.early_fragment_tests('ps', flagged(0x880, 0)))
+        self.assertFalse(seed.early_fragment_tests('vs', flagged(0x880, 1)))          # a fragment flag only
+        self.assertFalse(seed.early_fragment_tests('ps', flagged(0x848, 1)))          # Breath of the Wild's layout: not read
+        with tempfile.TemporaryDirectory() as tmp:   # the seed's requests carry it
+            def request(stage, flag):
+                c = bytearray(flagged(0x880, flag)); struct.pack_into('<II', c, 0x700, 0x30, 0x40)
+                return seed.translation_request('v', stage, bytes(c), bytes(0x40), {}, Path(tmp)/'v.code')
+            self.assertIs(request('ps', 1).get('early_fragment_tests'), True)
+            self.assertNotIn('early_fragment_tests', request('ps', 0))
+            self.assertNotIn('early_fragment_tests', request('vs', 1))
         agl = bytes(0x14)+b'\x40\0\0\0'+bytes(8)+struct.pack('<I', 0x848)+bytes(0x848-0x24)
         self.assertEqual(seed.bound_control(agl), agl)                    # Tears of the Kingdom: as in the archive
         self.assertEqual(seed.bound_control(agl, 'botw')[0x14:0x16], bytes(2))
@@ -180,8 +194,8 @@ class ShaderKeyScope(unittest.TestCase):
                 seed.shader_key_scope(**values)
 
     def test_preparation_keeps_untranslated_and_located_keys_and_rebuilds_old_seed(self):
-        # A tiny service prepares one startup shader. The other inventory shader and verified locator need no startup
-        # variant but still belong to this game; filtering by the translated seed would incorrectly lose their cache.
+        # A tiny service prepares the shaders. One is a startup shader; the other inventory shader and the verified
+        # locator are translated for the default bind state too (all_default) and belong to this game either way.
         class Service:
             def __init__(self, *args, **kwargs):
                 self.stdin = self.stdout = self
@@ -215,7 +229,8 @@ class ShaderKeyScope(unittest.TestCase):
                 manifest = seed.prepare(romfs, output, translator, cross, '1.2.1', shared)
                 scope = json.loads((output/'shader-keys.json').read_text())
                 self.assertEqual(scope['keys'], sorted(row[0] for row in rows))
-                self.assertEqual((manifest['shaders'], manifest['discovered'], manifest['located']), (1, 3, 1))
+                self.assertEqual((manifest['shaders'], manifest['discovered'], manifest['located']), (3, 3, 1))
+                self.assertEqual(manifest['startup_shaders'], 1)
                 self.assertEqual(manifest['files']['shader-keys.json'], seed.digest((output/'shader-keys.json').read_bytes()))
                 self.assertEqual(seed.prepare(romfs, output, translator, cross, '1.2.1', shared), manifest)
                 self.assertEqual(inventory.call_count, 1)
@@ -232,7 +247,7 @@ class ShaderKeyScope(unittest.TestCase):
                 self.assertEqual(json.loads((output/'shader-keys.json').read_text())['keys'], scope['keys'])
                 self.assertEqual(inventory.call_count, 1)
 
-    def prepare_with_service(self, root, output, listed=(), translator_text='', fail=(), inventory_calls=None):
+    def prepare_with_service(self, root, output, listed=(), translator_text='', fail=(), inventory_calls=None, compare=()):
         """prepare() with a synthetic service; returns (manifest, the variants it was asked to translate)."""
         asked = []
 
@@ -249,9 +264,13 @@ class ShaderKeyScope(unittest.TestCase):
                     return
                 base = Path(request['code']).with_suffix('')
                 deps = {k: request[k] for k in ('tex', 'img', 'attr', 'fout')}
+                deps['tex'] = {'1': '2d', '2': '2d', **deps['tex']}   # as if the code queried the kind of slots 1 and 2
+                key = request['variant'].split('-')[0]
+                if key in compare:   # slot 3 is compare-sampled and not queried: only whether a depth texture is bound counts
+                    deps['tex']['3'] = '*_depth' if deps['tex'].get('3', '').endswith('_depth') else '*'
                 base.with_name(base.name+'_b.metal').write_text('// synthetic '+request['variant'])
                 base.with_name(base.name+'_b.json').write_text(json.dumps(
-                    dict(chain=seed.CHAIN, stage=request['stage'], deps=deps)))
+                    dict(chain=seed.CHAIN, stage=request['stage'], deps=deps, compare_slots=[3] if key in compare else [])))
                 self.reply = '{"ok":true}\n'
 
             def flush(self): pass
@@ -295,25 +314,113 @@ class ShaderKeyScope(unittest.TestCase):
             more = first+[(rows[1][0], self.deps(tex={'2': '3d'}))]
             calls = []
             _, asked, _ = self.prepare_with_service(root, root/'seed', first, inventory_calls=calls)
-            self.assertEqual(len(asked), 3)   # two default bind states and one listed
+            self.assertEqual(len(asked), 4)   # every shader's default bind state and one listed
             (root/'seed'/('f'*64+'-'+'0'*12+'_b.metal')).write_text('left from an older seed')   # removed, not kept
             manifest, asked, _ = self.prepare_with_service(root, root/'seed', more, inventory_calls=calls)
             self.assertEqual(asked, [rows[1][0]+'-'+seed.suffix({**seed.ANSWERS, 'tex': {'2': '3d'}})])
             self.assertEqual(calls, [1, 0])   # the RomFS was not scanned again
-            self.assertEqual(manifest['shaders'], 4)
+            self.assertEqual(manifest['shaders'], 5)
             # A fresh preparation of the longer list, with no caches, gives byte-identical files.
             fresh = root/'fresh'; fresh.mkdir()
             full, asked, _ = self.prepare_with_service(fresh, fresh/'seed', more)
-            self.assertEqual(len(asked), 4)
+            self.assertEqual(len(asked), 5)
             self.assertEqual(self.tree(root/'seed'), self.tree(fresh/'seed'))
             self.assertEqual(manifest['files'], full['files'])
+
+    def test_a_listed_state_another_variant_serves_is_not_translated_but_named_in_the_aliases(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            rows = list(seed.bnsh_shaders(bnsh()))
+            # slot 5 was never queried: the default variant serves a 3D texture there; slot 1 was, so a cube needs its own
+            listed = [(rows[0][0], self.deps(tex={'5': '3d'})), (rows[0][0], self.deps(tex={'1': 'cube'}))]
+            manifest, asked, _ = self.prepare_with_service(root, root/'seed', listed)
+            served = rows[0][0]+'-'+seed.suffix({**seed.ANSWERS, 'tex': {'5': '3d'}})
+            self.assertNotIn(served, asked)
+            self.assertIn(rows[0][0]+'-'+seed.suffix({**seed.ANSWERS, 'tex': {'1': 'cube'}}), asked)
+            aliases = (root/'seed.aliases.tsv').read_text().splitlines()
+            self.assertEqual(aliases, [served+'\t'+rows[0][0]+'-'+seed.SUFFIX])
+            self.assertEqual(manifest['shaders'], 4)
+
+    def test_a_shader_sampling_shadow_maps_gets_its_depth_bound_variant_without_a_listed_row(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            rows = list(seed.bnsh_shaders(bnsh()))
+            shadow = rows[0][0]
+            listed = [(shadow, self.deps(tex={'3': '2darray_depth'}))]   # what a player met: served by the derived variant
+            manifest, asked, _ = self.prepare_with_service(root, root/'seed', listed, compare={shadow})
+            depth = shadow+'-'+seed.suffix(seed.answers_for({'tex': {'3': '*_depth'}}))
+            self.assertIn(depth, asked)
+            self.assertNotIn(shadow+'-'+seed.suffix(seed.answers_for(json.loads(listed[0][1]))), asked)
+            self.assertEqual(manifest['shaders'], 4)   # three defaults and the derived one
+            self.assertIs(manifest['all_default'], True)   # the runtime contributes only other states then
+            index = json.loads((root/'seed'/(shadow+'.variants')).read_text())
+            self.assertEqual([row['deps']['tex']['3'] for row in index], ['*', '*_depth'])
+            # the derived translation stays in the translation cache: a second preparation asks for nothing
+            (root/'seed'/'seed-manifest.json').unlink()
+            _, again, _ = self.prepare_with_service(root, root/'seed', listed, compare={shadow})
+            self.assertEqual(again, [])
+
+    def test_deps_match_reads_wildcard_texture_kinds_and_unbound_vertex_inputs_as_the_runtime_does(self):
+        deps = {'tex': {'1': '*', '2': '*_depth', '3': '2d'}, 'attr': {'0': 'uint'}, 'fout': {}, 'img': {}}
+        self.assertTrue(seed.deps_match(deps, {'tex': {'1': 'cube', '2': '2darray_depth'}, 'attr': {'0': 'uint'}}))
+        self.assertTrue(seed.deps_match(deps, {'tex': {'2': '2d_depth'}}))              # unbound slot 1 and input 0
+        self.assertFalse(seed.deps_match(deps, {'tex': {'1': '2d_depth', '2': '2d_depth'}}))
+        self.assertFalse(seed.deps_match(deps, {'tex': {'2': '2d'}}))
+        self.assertFalse(seed.deps_match(deps, {'tex': {'2': '2d_depth', '3': '3d'}}))   # a queried kind still counts
+        self.assertFalse(seed.deps_match(deps, {'tex': {'2': '2d_depth'}, 'attr': {'0': 'float'}}))
+        self.assertEqual(seed.answers_for({'tex': {'1': '*', '2': '*_depth', '3': 'cube'}})['tex'],
+                         {'1': '2d', '2': '2d_depth', '3': 'cube'})
+
+    def test_a_shared_translation_cache_serves_another_work_folder_and_keeps_its_entries(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root/'a').mkdir(); (root/'b').mkdir()
+            with mock.patch.dict(os.environ, {'TOTK_TRANSLATION_CACHE': str(root/'translations')}):
+                _, first, _ = self.prepare_with_service(root/'a', root/'a'/'seed')
+                _, again, _ = self.prepare_with_service(root/'b', root/'b'/'seed')   # another work folder (a clone)
+            self.assertTrue(first)
+            self.assertEqual(again, [])
+            self.assertFalse((root/'a'/'seed.translations').exists())
+            [shared] = [p for p in (root/'translations').iterdir() if p.is_dir()]
+            self.assertTrue(any(p.name.endswith('_b.metal') for p in shared.iterdir()))
+            # a new translator gets a folder of its own; the old one stays for whoever still uses it
+            with mock.patch.dict(os.environ, {'TOTK_TRANSLATION_CACHE': str(root/'translations')}):
+                _, other, _ = self.prepare_with_service(root/'b', root/'b'/'seed', translator_text='another build')
+            self.assertEqual(sorted(other), sorted(first))
+            self.assertEqual(len([p for p in (root/'translations').iterdir() if p.is_dir()]), 2)
+
+    def test_builtin_serves_only_the_default_and_depth_bound_variants_not_listed_ones(self):
+        key, other = 'a'*64, 'b'*64
+        depth = seed.answers_for({'tex': {'3': '*_depth'}})
+        rows = [{'variant': f'{key}-{seed.SUFFIX}', 'deps': {'tex': {'3': '*'}, 'attr': {'6': 'uint'}, 'fout': {'0': 'float'}}},
+                {'variant': f'{key}-{seed.suffix(depth)}', 'deps': {'tex': {'3': '*_depth'}, 'attr': {'6': 'uint'}, 'fout': {'0': 'float'}}},
+                {'variant': f'{key}-{"c"*12}', 'deps': {'fout': {'0': 'uint'}}}]   # a listed variant the seed also made
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root/f'{key}.variants').write_text(json.dumps(rows))
+            (root/f'{key}-{seed.SUFFIX}_b.json').write_text(json.dumps({'compare_slots': [3]}))
+            self.assertTrue(seed.builtin_serves(root, key, '{"tex":{"3":"2darray"},"attr":{"6":"uint"}}'))
+            self.assertTrue(seed.builtin_serves(root, key, {'tex': {'3': '2d_depth'}}))      # the depth-bound one
+            self.assertFalse(seed.builtin_serves(root, key, {'attr': {'6': 'float'}}))      # a float input: its own variant
+            self.assertFalse(seed.builtin_serves(root, key, {'fout': {'0': 'uint'}}))      # served by a listed variant only
+            self.assertFalse(seed.builtin_serves(root, other, {}))                          # not a shader of this seed
+            lst = root/'list.tsv'
+            lst.write_text(f'V\t{key}\t{{"attr":{{"6":"uint"}},"fout":{{}},"img":{{}},"tex":{{"3":"2d"}}}}\n'
+                           f'V\t{key}\t{{"attr":{{"6":"float"}},"fout":{{}},"img":{{}},"tex":{{}}}}\n'
+                           f'V\t{other}\t{{"attr":{{}},"fout":{{}},"img":{{}},"tex":{{}}}}\n')
+            done = subprocess.run(['python3', '-I', str(ROOT/'games/totk/scripts/shader_list.py'), 'prune', str(lst), str(root)],
+                                  capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            kept = [l for l in lst.read_text().splitlines() if l.startswith('V')]
+            self.assertEqual(kept, [f'V\t{key}\t{{"attr":{{"6":"float"}},"fout":{{}},"img":{{}},"tex":{{}}}}',
+                                    f'V\t{other}\t{{"attr":{{}},"fout":{{}},"img":{{}},"tex":{{}}}}'])
 
     def test_a_new_translator_empties_the_translation_cache(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             self.prepare_with_service(root, root/'seed')
             _, asked, _ = self.prepare_with_service(root, root/'seed', translator_text='another build')
-            self.assertEqual(len(asked), 2)
+            self.assertEqual(len(asked), 3)
 
     def test_failed_translations_are_remembered_and_unused_entries_dropped(self):
         with tempfile.TemporaryDirectory() as folder:

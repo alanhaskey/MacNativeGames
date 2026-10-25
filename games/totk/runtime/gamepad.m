@@ -8,11 +8,15 @@
 #endif
 #include <math.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include "runtime.h"
 #include "gamepad_layout.h"   // face buttons by position (PlayStation, Xbox) or label (Nintendo)
 #include "controller_map.h"   // the player's button layout (controls.txt)
+#include "switch_left_fallback.h"
+#include "mouse_look.h"       // mouse mode: movement as the right stick and the gyro
 
 static pthread_mutex_t gamepadLock = PTHREAD_MUTEX_INITIALIZER;
 static RuntimeGamepadState gamepadState;
@@ -24,7 +28,20 @@ static uint64_t physicalPrev;
 static uint64_t tapUntil[CONTROLLER_BUTTONS];   /* ns, for tap */
 static int toggleOn[CONTROLLER_BUTTONS];        /* for toggle */
 static int toggleMoved[CONTROLLER_BUTTONS];     /* the stick moved since the toggle went on */
+static __weak GCController *rawLeftController;
+static SwitchLeftFallback rawLeft;
+static uint64_t gamepadRawLeftAt;
+static int32_t gamepadNativeLx, gamepadNativeLy;
 static void refresh_gamepads(void);
+
+/* Called on the main run loop by the already-open Switch HID motion stream. */
+void runtime_gamepad_switch_left(void *source, int x, int y) {
+    GCController *controller = (__bridge GCController *)source;
+    if (rawLeftController != controller) rawLeft = (SwitchLeftFallback){0};
+    rawLeftController = controller;
+    switch_left_feed(&rawLeft, x, y, runtime_now_ns());
+    refresh_gamepads();
+}
 
 /* The player's button layout (controller_map.h): TOTK_CONTROLS names the file (the launcher: <data>/controls.txt and
    checks it first). No file: the default layout. */
@@ -56,8 +73,54 @@ static int32_t stronger_axis(int32_t a, int32_t b) {
     return abs(b) > abs(a) ? b : a;
 }
 
+/* Settings the keys change (6: controller type, 7: mouse mode), one word each in a file next to controls.txt
+   (TOTK_CONTROLS; a run without it, such as a test, neither reads nor writes them), so they hold for the next launch. */
+static int setting_path(const char *name, char *out, size_t size) {
+    const char *controls = getenv("TOTK_CONTROLS");
+    if (!controls || !*controls) return 0;
+    const char *slash = strrchr(controls, '/');
+    int dir = slash ? (int)(slash - controls) : 0;
+    int n = slash ? snprintf(out, size, "%.*s/%s", dir, controls, name) : snprintf(out, size, "%s", name);
+    return n > 0 && (size_t)n < size;
+}
+
+static int setting_read(const char *name, char *word, size_t size, char *path, size_t path_size) {   /* 1: read */
+    if (!setting_path(name, path, path_size)) return 0;
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;   /* never changed: the default */
+    size_t n = fread(word, 1, size - 1, f);
+    fclose(f);
+    word[n] = 0;
+    return 1;
+}
+
+static void setting_write(const char *name, const char *word, const char *what) {
+    char path[4096], temp[4200];
+    if (!setting_path(name, path, sizeof path)) return;
+    snprintf(temp, sizeof temp, "%s.tmp", path);
+    FILE *f = fopen(temp, "w");
+    int ok = f && fprintf(f, "%s\n", word) > 0;
+    if (f && fclose(f)) ok = 0;
+    if (ok && rename(temp, path)) ok = 0;
+    if (!ok) { fprintf(stderr, "[totk-input] could not save the %s to %s; it holds until the game closes\n", what, path); unlink(temp); }
+}
+
+/* Controller type (gamepad_layout.h GAMEPAD_TYPE_*), key 6 on the Mac, in controller-type.txt. */
+static _Atomic int controllerType = GAMEPAD_TYPE_AUTO;
+
+static void load_controller_type(void) {
+    char path[4096], word[64] = {0};
+    if (!setting_read("controller-type.txt", word, sizeof word, path, sizeof path)) return;
+    int type = gamepad_type_parse(word);
+    if (type < 0) { fprintf(stderr, "[totk-input] %s: not a controller type (auto, xbox, playstation, switch); using auto\n", path); return; }
+    atomic_store(&controllerType, type);
+    fprintf(stderr, "[totk-input] controller type: %s (%s)\n", gamepad_type_name(type), path);
+}
+
+static void save_controller_type(int type) { setting_write("controller-type.txt", gamepad_type_name(type), "controller type"); }
+
 static int face_by_position(GCController *controller) {
-    return gamepad_face_by_position(controller.productCategory.UTF8String, controller.vendorName.UTF8String);
+    return gamepad_type_face_by_position(atomic_load(&controllerType), controller.productCategory.UTF8String, controller.vendorName.UTF8String);
 }
 
 /* The physical buttons held, bit i = controller_physical_names[i]; the face buttons by where they sit
@@ -259,16 +322,129 @@ static HIDPadState hidPad;
 static void hid_pad_start(void) {}
 #endif
 
+/* ---- Mouse mode (Mac, key 7; in mouse.txt) ----
+   The window (runtime/frontend.m) holds the pointer while mouse mode is on and the window has the keyboard, and sends
+   the mouse's buttons and movement here. Buttons are physical buttons 17-21 of the controller layout (controller_map.h:
+   left attack, right draw the bow with left to shoot, middle target), so controls.txt can change them. Movement goes to
+   runtime/mouse_look.h, ticked every 10 ms by a timer while mouse mode is on: the right stick (the stronger of it and a
+   controller's) and, unless TOTK_MOUSE_GYRO=0 or the game has no six-axis device (TOTK_GYRO=0), the gyro, which the
+   mouse then has to itself (runtime_motion_mouse). Settings: TOTK_MOUSE_SENSITIVITY 1-100 (50), TOTK_MOUSE_INVERT_Y=1,
+   TOTK_MOUSE_COUNTERWEIGHT, TOTK_MOUSE_DECAY, TOTK_MOUSE_MIN_DECAY 0-100 (20, 18, 6). */
+static _Atomic int mouseMode;
+static unsigned mouseButtons;                  /* main thread; bit i = mouse button i (0 left, 1 right, 2 middle, 3, 4) */
+static MouseLook mouseLook;                    /* gamepadLock */
+static MouseLookSettings mouseSettings;        /* gamepadLock */
+static int32_t mouseRX, mouseRY;               /* gamepadLock; the stick shown by the last tick */
+static int mouseGyro;                          /* the mouse feeds the gyro in this mouse mode */
+static dispatch_source_t mouseTimer;
+static int mouseTicksByHand;                   /* tests/mouse/probe.m drives mouse_tick itself */
+static void (*mouseHook)(void);                /* the window: mouse mode changed */
+
+static void mouse_tick(void) {
+    double gyro[3], acc[3]; int32_t rx, ry;
+    pthread_mutex_lock(&gamepadLock);
+    mouse_look_tick(&mouseLook, &mouseSettings, &rx, &ry, gyro, acc);
+    mouseRX = rx; mouseRY = ry;
+    int feed = mouseGyro;
+    pthread_mutex_unlock(&gamepadLock);
+    if (feed) runtime_motion_feed_mouse(acc, gyro, runtime_now_ns());
+}
+
+static void mouse_apply(int on) {   /* start or stop the ticks and the gyro takeover */
+    if (on) {
+        const char *g = getenv("TOTK_MOUSE_GYRO");
+        MouseLookSettings settings = mouse_look_settings(getenv("TOTK_MOUSE_SENSITIVITY"), getenv("TOTK_MOUSE_INVERT_Y"),
+                                                         getenv("TOTK_MOUSE_COUNTERWEIGHT"), getenv("TOTK_MOUSE_DECAY"), getenv("TOTK_MOUSE_MIN_DECAY"));
+        int gyro = runtime_gyro_enabled() && !(g && !strcmp(g, "0"));
+        pthread_mutex_lock(&gamepadLock);
+        mouseSettings = settings; mouse_look_reset(&mouseLook); mouseRX = mouseRY = 0; mouseGyro = gyro;
+        pthread_mutex_unlock(&gamepadLock);
+        runtime_motion_mouse(gyro);
+        fprintf(stderr, "[totk-input] mouse mode on: sensitivity %d%s, counterweight %d, decay %d, minimum decay %d, gyro %s\n",
+                settings.sensitivity, settings.invert_y ? " (Y inverted)" : "", settings.counterweight, settings.decay, settings.min_decay,
+                gyro ? "from the mouse" : "not from the mouse");
+        if (!mouseTicksByHand && !mouseTimer) {
+            mouseTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_queue_create("totk.mouse", DISPATCH_QUEUE_SERIAL));
+            dispatch_source_set_timer(mouseTimer, dispatch_time(DISPATCH_TIME_NOW, MOUSE_LOOK_TICK_NS), MOUSE_LOOK_TICK_NS, 1000000);
+            dispatch_source_set_event_handler(mouseTimer, ^{ mouse_tick(); });
+            dispatch_resume(mouseTimer);
+        }
+    } else {
+        if (mouseTimer) { dispatch_source_cancel(mouseTimer); mouseTimer = nil; }
+        pthread_mutex_lock(&gamepadLock);
+        mouse_look_reset(&mouseLook); mouseRX = mouseRY = 0; mouseGyro = 0;
+        pthread_mutex_unlock(&gamepadLock);
+        runtime_motion_mouse(0);
+        fprintf(stderr, "[totk-input] mouse mode off\n");
+    }
+    if (mouseHook) dispatch_async(dispatch_get_main_queue(), ^{ mouseHook(); });
+}
+
+static void load_mouse_mode(void) {
+    char path[4096], word[16] = {0};
+    if (!setting_read("mouse.txt", word, sizeof word, path, sizeof path)) return;
+    int on = !strcmp(word, "on\n") || !strcmp(word, "on");
+    if (!on && strcmp(word, "off\n") && strcmp(word, "off")) fprintf(stderr, "[totk-input] %s: not on or off; mouse mode off\n", path);
+    if (on != atomic_load(&mouseMode)) { atomic_store(&mouseMode, on); mouse_apply(on); }
+}
+
+int runtime_mouse_enabled(void) { return atomic_load(&mouseMode); }
+void runtime_mouse_set_hook(void (*hook)(void)) { mouseHook = hook; }
+
+/* Key 7 (runtime/input.c). */
+int runtime_mouse_toggle(void) {
+    int on = !atomic_load(&mouseMode);
+    atomic_store(&mouseMode, on);
+    setting_write("mouse.txt", on ? "on" : "off", "mouse mode");
+    if (!on) dispatch_async(dispatch_get_main_queue(), ^{ runtime_mouse_release(); });
+    mouse_apply(on);
+    return on;
+}
+
+void runtime_mouse_move(double dx, double dy) {   /* the window, while it holds the pointer */
+    if (!atomic_load(&mouseMode)) return;
+    pthread_mutex_lock(&gamepadLock);
+    mouse_look_move(&mouseLook, dx, dy, &mouseSettings);
+    pthread_mutex_unlock(&gamepadLock);
+}
+
+void runtime_mouse_button(int button, int down) {   /* main thread */
+    if (button < 0 || button >= CONTROLLER_MOUSE_BUTTONS || (down && !atomic_load(&mouseMode))) return;
+    unsigned bit = 1u << button, next = down ? mouseButtons | bit : mouseButtons & ~bit;
+    if (next == mouseButtons) return;
+    mouseButtons = next;
+    refresh_gamepads();
+}
+
+void runtime_mouse_release(void) {   /* main thread: the window let the pointer go (focus lost, text entry, mouse mode off) */
+    pthread_mutex_lock(&gamepadLock);
+    mouse_look_reset(&mouseLook); mouseRX = mouseRY = 0;
+    pthread_mutex_unlock(&gamepadLock);
+    if (mouseButtons) { mouseButtons = 0; refresh_gamepads(); }
+}
+
 static void refresh_gamepads(void) {
     RuntimeGamepadState next = {0};
-    uint64_t physical = 0;
+    uint64_t physical = (uint64_t)mouseButtons << CONTROLLER_MOUSE_FIRST;
+    int32_t nativeLx = 0, nativeLy = 0;
+    uint64_t rawAt = 0;
     for (GCController *controller in GCController.controllers) {
         GCExtendedGamepad *pad = controller.extendedGamepad;
         if (!pad) continue;
         next.connected = 1;
         physical |= gamepad_buttons(pad, face_by_position(controller));
-        next.lx = stronger_axis(next.lx, stick_axis(pad.leftThumbstick.xAxis.value));
-        next.ly = stronger_axis(next.ly, stick_axis(pad.leftThumbstick.yAxis.value));
+        float lx = pad.leftThumbstick.xAxis.value, ly = pad.leftThumbstick.yAxis.value;
+        nativeLx = stronger_axis(nativeLx, stick_axis(lx));
+        nativeLy = stronger_axis(nativeLy, stick_axis(ly));
+        int wasActive = rawLeft.active;
+        float rawX, rawY;
+        if (controller == rawLeftController && switch_left_get(&rawLeft, lx, ly, runtime_now_ns(), &rawX, &rawY)) {
+            lx = rawX; ly = rawY;
+            rawAt = rawLeft.at;
+            if (!wasActive) fprintf(stderr, "[totk-input] Switch left stick: native axes stuck at zero; using live HID input\n");
+        }
+        next.lx = stronger_axis(next.lx, stick_axis(lx));
+        next.ly = stronger_axis(next.ly, stick_axis(ly));
         next.rx = stronger_axis(next.rx, stick_axis(pad.rightThumbstick.xAxis.value));
         next.ry = stronger_axis(next.ry, stick_axis(pad.rightThumbstick.yAxis.value));
     }
@@ -316,6 +492,8 @@ static void refresh_gamepads(void) {
     pthread_mutex_lock(&gamepadLock);
     pressedEdges |= next.buttons & ~gamepadState.buttons;
     gamepadState = next;
+    gamepadRawLeftAt = rawAt;
+    gamepadNativeLx = nativeLx; gamepadNativeLy = nativeLy;
     pthread_mutex_unlock(&gamepadLock);
 }
 
@@ -333,10 +511,40 @@ static void attach_gamepad(GCController *controller) {
     refresh_gamepads();
 }
 
+/* Key 6 (runtime/input.c): the next type (auto -> Xbox -> PlayStation -> Switch); the held buttons are read again at once. */
+int runtime_gamepad_type_cycle(void) {
+    int type = gamepad_type_next(atomic_load(&controllerType));
+    atomic_store(&controllerType, type);
+    save_controller_type(type);
+    fprintf(stderr, "[totk-input] controller type: %s (key 6)\n", gamepad_type_name(type));
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (GCController *controller in GCController.controllers)
+            if (controller.extendedGamepad)
+                fprintf(stderr, "[totk-input] %s: face buttons by %s\n", (controller.vendorName ?: @"unknown").UTF8String,
+                        face_by_position(controller) ? "position" : "label");
+        refresh_gamepads();
+    });
+    return type;
+}
+
+/* For the HUD (main thread): the picked type; *detected = what auto takes the first connected controller for, -1 none. */
+int runtime_gamepad_type(int *detected) {
+    int found = -1;
+    for (GCController *controller in GCController.controllers)
+        if (controller.extendedGamepad) { found = gamepad_type_detect(controller.productCategory.UTF8String, controller.vendorName.UTF8String); break; }
+#if TARGET_OS_OSX
+    if (found < 0 && hidPad.present) found = GAMEPAD_TYPE_SWITCH;   /* the generic HID pads are Switch-style */
+#endif
+    if (detected) *detected = found;
+    return atomic_load(&controllerType);
+}
+
 void runtime_gamepad_start(void) {
     if (started) return;
     started = YES;
     load_controller_map();
+    load_controller_type();
+    load_mouse_mode();
     NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
     [center addObserverForName:GCControllerDidConnectNotification object:nil queue:NSOperationQueue.mainQueue
                    usingBlock:^(NSNotification *notification) { attach_gamepad(notification.object); }];
@@ -361,7 +569,10 @@ void runtime_gamepad_clear(void) {
     memset(toggleMoved, 0, sizeof toggleMoved);
     pthread_mutex_lock(&gamepadLock);
     gamepadState = (RuntimeGamepadState){0};
+    gamepadRawLeftAt = 0;
+    gamepadNativeLx = gamepadNativeLy = 0;
     pressedEdges = 0;
+    mouse_look_reset(&mouseLook); mouseRX = mouseRY = 0;
     pthread_mutex_unlock(&gamepadLock);
 }
 
@@ -379,9 +590,13 @@ void runtime_touch_pad_set(const RuntimeGamepadState *s) {
 void runtime_gamepad_read(RuntimeGamepadState *out) {
     pthread_mutex_lock(&gamepadLock);
     *out = gamepadState;
+    if (gamepadRawLeftAt && runtime_now_ns() - gamepadRawLeftAt > 250000000ULL) {
+        out->lx = gamepadNativeLx; out->ly = gamepadNativeLy;
+    }
     out->buttons |= touchState.buttons | pressedEdges;
     out->lx = stronger_axis(out->lx, touchState.lx); out->ly = stronger_axis(out->ly, touchState.ly);
     out->rx = stronger_axis(out->rx, touchState.rx); out->ry = stronger_axis(out->ry, touchState.ry);
+    out->rx = stronger_axis(out->rx, mouseRX); out->ry = stronger_axis(out->ry, mouseRY);
     if (touchState.connected) out->connected = 1;
     pressedEdges = 0;
     pthread_mutex_unlock(&gamepadLock);

@@ -240,6 +240,8 @@ static void hid_report(void *ctx, IOReturn result, void *sender, IOHIDReportType
         return;
     }
     if (id != 0x30) return;
+    runtime_gamepad_switch_left((__bridge void *)motionPad,
+        p[6] | (p[7] & 15) << 8, (p[7] >> 4) | p[8] << 4);
     uint64_t now = runtime_now_ns(), step = hidLast && now - hidLast < 50000000ull ? (now - hidLast) / 3 : 5000000ull;
     hidLast = now;
     for (int k = 0; k < 3; k++) {
@@ -278,6 +280,7 @@ static void hid_motion_start(void) {   /* main queue */
 }
 static void hid_motion_stop(void) {   /* main queue */
     if (!hidDevice) return;
+    runtime_gamepad_switch_left(NULL, -1, -1);
     IOHIDDeviceRegisterInputReportCallback(hidDevice, hidReport, sizeof hidReport, NULL, NULL);
     IOHIDDeviceUnscheduleFromRunLoop(hidDevice, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
     IOHIDDeviceClose(hidDevice, kIOHIDOptionsTypeNone);

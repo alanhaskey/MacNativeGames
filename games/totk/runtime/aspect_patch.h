@@ -1,10 +1,14 @@
 /* Other picture shapes on the Mac: key 4 cycles the game's 16:9 -> fitting the window / display (a 21:9 or 32:9 monitor, a
    MacBook's 16:10 in full screen below the notch) -> 21:9 -> 16:9. Fitting is skipped while the window is within 1% of
    16:9 or 21:9, where it would show the same. TOTK_ASPECT=32:9, 16:10, 3440x1440 or 2.39 takes the place of 21:9 and
-   starts on it; TOTK_ASPECT=display starts on fitting the window. Not on iPhone / iPad.
-   The game keeps drawing into its 16:9 canvas, but with the camera's aspect ratio set to the other one, so the picture
-   holds the other view squeezed into it; the present pass then stretches it over the window (nvn_mtl.m
-   present_stretch asks runtime_aspect_now), which restores the proportions on a screen of that shape.
+   starts on it; TOTK_ASPECT=display starts on fitting the window. iPhone / iPad: always the screen's shape (no key
+   4; TOTK_ASPECT=0 keeps 16:9), see the TARGET_OS_IPHONE part of aspect_install.
+   Not a stretched picture: the camera's projection takes the other aspect ratio, so more of the world is seen at the
+   sides and shapes keep their proportions (widening only the viewport's width / height division, the first try, gave a
+   stretched 16:9 view; the user saw it at once, 2026-10-19). The game still draws into its 16:9 canvas, which then
+   holds that wider view squeezed across; the present pass widens the canvas back over the window (nvn_mtl.m
+   present_stretch asks runtime_aspect_now). The pixels are the canvas's: across, 1920 of them (1280 on the phone) cover
+   the wider window, so it is that much less sharp across; the 3D scene keeps the game's own render size.
    The community's TOTK-Ultrawide mod for emulators (GPL; none of its code is used here) changes the camera parameter
    DefaultAspect (1.777778 in main's read-only data) and a viewport routine's width / height division. DefaultAspect is
    only copied when a camera is made, so it cannot follow a key; instead each place that hands an aspect ratio to the
@@ -98,7 +102,28 @@ int runtime_aspect_toggle(void) {
 static inline void aspect_install(Module *m, const char *version, const uint64_t *sites, unsigned nsite, unsigned ncam,
                                   uint64_t stub_off, uint64_t vert_off, uint64_t data_off) {
 #if TARGET_OS_IPHONE
-    (void)m; (void)version; (void)sites; (void)nsite; (void)ncam; (void)stub_off; (void)vert_off; (void)data_off;
+    /* The phone fills its screen (user 2026-10-23: "iphone 全屏"), as key 4 on the Mac: the camera's projection takes the
+       screen's shape (2.16 on an iPhone 14), so shapes keep their proportions, and the 1280x720 canvas holding that view
+       is widened back over the 1558x720 drawable. No extra memory; 1280 pixels across cover the screen's width (82%). The stubs are already in the embedded main (the iOS export runs this function on
+       the Mac), so here each site is only checked to branch to its stub and the ratio slot on the data page is used.
+       TOTK_ASPECT=0 (or 16:9) keeps the game's 16:9 with bars at the sides. */
+    (void)ncam; (void)vert_off;
+    const char *e = getenv("TOTK_ASPECT");
+    if (e && (!strcmp(e, "0") || !strcmp(e, "16:9"))) { fprintf(stderr, "[totk] %s aspect ratio: 16:9 (TOTK_ASPECT=%s)\n", version, e); return; }
+    if (data_off + ASPECT_DATA_SLOT + 4 > m->size) { fprintf(stderr, "[totk] %s aspect ratio: no data page after main, 16:9\n", version); return; }
+    for (unsigned i = 0; i < nsite; i++) {
+        uint32_t got; memcpy(&got, m->base + sites[i], 4);
+        if (got != aspect_b(sites[i], stub_off + ASPECT_STUB * i)) {
+            fprintf(stderr, "[totk] %s aspect ratio: site +%#llx is not the export's stub branch (%08x), 16:9\n", version, (unsigned long long)sites[i], got);
+            return;
+        }
+    }
+    g_aspect_slot = (_Atomic(uint32_t) *)(void *)(m->base + data_off + ASPECT_DATA_SLOT);
+    atomic_store(g_aspect_slot, 0);
+    g_aspect_wide = (float)ASPECT_WIDE;
+    atomic_store(&g_aspect_step, ASPECT_STEP_FIT);
+    aspect_apply();   /* 0 until the front end reports the drawable (runtime_aspect_view) */
+    fprintf(stderr, "[totk] %s aspect ratio: fills the screen (the camera takes the drawable's shape; TOTK_ASPECT=0 for 16:9)\n", version);
 #else
     double req = aspect_requested();
     /* TODO(Vert+): opt-in (TOTK_ASPECT_VERT=1) until these are fixed. Known issues:

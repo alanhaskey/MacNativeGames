@@ -2,11 +2,14 @@
 """Make a RomFS mod that draws keyboard keys, Xbox or PlayStation controller buttons in place of the Switch button icons.
 
 The A/B/X/Y, L/R, ZL/ZR, +/- and d-pad icons the game shows in its prompts are glyphs of one font,
-scft/External.bfotf in Font/Font.Nin_NX_NVN.bfarc.zs (private-use code points U+E040 to U+E068). This script reads that
-archive from the player's own RomFS, redraws those glyphs, packs the archive back the way the game stores it and writes
-it into a mod folder (runtime/romfs.c serves it in place of the original), then writes the folder's manifest.tsv with
-make_mod_manifest.py. Nothing of the game ships with the project: every font comes from the player's RomFS. The archive
-is the same in 1.0.0 and 1.2.1 (same SHA-256), so one mod folder per version is enough.
+scft/External.bfotf (private-use code points U+E040 to U+E068). Every font archive has its own copy: Korean and both
+Chinese read Font/Font_KRko, Font_CNzh and Font_TWzh.Nin_NX_NVN.bfarc.zs, every other language
+Font/Font.Nin_NX_NVN.bfarc.zs (1.4.3: the four copies are byte-identical). This script reads those archives from the
+player's own RomFS, redraws those glyphs, packs each archive back the way the game stores it and writes them into a mod
+folder (runtime/romfs.c serves them in place of the originals), then writes the folder's manifest.tsv with
+make_mod_manifest.py. The letters on the keys come from the text fonts of the default archive (the regional ones lack
+them). Nothing of the game ships with the project: every font comes from the player's RomFS. The default archive is the
+same in 1.0.0 and 1.2.1 (same SHA-256), so one mod folder per version is enough.
 
 Styles:
   keyboard  the keys the Mac keyboard plays (app/launcher.m): A B X Y = J K I U, L R = Q E, ZL ZR = Option Shift,
@@ -22,7 +25,12 @@ Prompts drawn as fixed images (some tutorial animations) keep the Switch icons: 
 Format notes (checked on 1.0.0 and 1.2.1): a .bfotf is an OpenType (CFF) font with an 8-byte header, XOR-ed with a
 32-bit key; the first word XOR 0x18029a7f gives the key and the second word, XOR the key, holds the big-endian size.
 The archive is a SARC; its members are packed again in their original order and alignment, and every member except
-External.bfotf must come out byte-identical. The archive is compressed with the zstd dictionary it used (Pack/ZsDic).
+External.bfotf must come out byte-identical. Each archive is compressed with the zstd dictionary it used (Pack/ZsDic).
+The redrawn archives are about 1.4 KB larger than the originals, past the few hundred bytes the game's resource size table
+leaves them (System/Resource/ResourceSizeTable.Product.<n>.Nin_NX_NVN.rsizetable.zs: a RESTBL, entries keyed by the CRC32
+of the path without .zs), and the game stops at start when it loads one. So the script also writes that table into the
+mod with each archive's entry at least the original entry plus what the archive grew; a table already in the mod folder
+(another mod's, or an earlier run) is the one it edits, so running again changes nothing more.
 
 Needs fontTools (python3.14 -m pip install fonttools) and Python 3.14 (compression.zstd). An existing font archive in the mod
 folder (another mod's, or an earlier run) is only overwritten with --replace. The xbox style matches the default face-button
@@ -33,6 +41,7 @@ import argparse
 import io
 import struct
 import sys
+import zlib
 from pathlib import Path
 
 try:
@@ -51,10 +60,29 @@ try:
 except ImportError:
     sys.exit('needs fontTools: pip install fonttools')
 
-ARCHIVE = 'Font/Font.Nin_NX_NVN.bfarc.zs'
+ARCHIVE = 'Font/Font.Nin_NX_NVN.bfarc.zs'  # the default archive; the text fonts for the key letters are read from it
 FONT = 'scft/External.bfotf'
 TEXT_FONTS = ('scft/ninP_RodinNTLG-B_DH_003_subset.bfotf', 'scft/nintendo_NTLG-DB_DH_002.bfotf')
 MAGIC = 0x18029a7f
+
+
+def restbl_offsets(table):
+    """CRC32 of a RomFS path without .zs -> offset of its size in the RESTBL `table`."""
+    assert table[:6] == b'RESTBL'
+    count = struct.unpack_from('<I', table, 14)[0]
+    return {struct.unpack_from('<I', table, 22 + i * 8)[0]: 22 + i * 8 + 4 for i in range(count)}
+
+
+def grow_restbl(table, original, growth):
+    """`table` with the entry of each path in `growth` (RomFS path -> bytes) at least its entry in the `original` table
+    plus that growth."""
+    at, base = restbl_offsets(table), restbl_offsets(original)
+    out = bytearray(table)
+    for path, extra in growth.items():
+        h = zlib.crc32(path.removesuffix('.zs').encode())
+        need = struct.unpack_from('<I', original, base[h])[0] + extra
+        struct.pack_into('<I', out, at[h], max(struct.unpack_from('<I', out, at[h])[0], need))
+    return bytes(out)
 
 
 def sarc_members(data):
@@ -383,14 +411,16 @@ def main():
         if not version:
             parser.error('name the game version with --version (or name the mod folder v0, v112, v121 or v143)')
         romfs = args.app / f'Contents/Resources/totk/extracted/{version}/romfs'
-    if (args.mod / ARCHIVE).exists() and not args.replace:
-        parser.error(f'{args.mod / ARCHIVE} already exists (another mod\'s font archive, or an earlier run): '
-                     'pass --replace to overwrite it')
     for need in ('romfs.bin', 'runtime-index.bin'):
         if not (romfs / need).is_file():
             parser.error(f'{romfs / need} not found')
 
     index = read_index(romfs / 'runtime-index.bin')
+    archives = [ARCHIVE] + sorted(p for p in index if p.startswith('Font/') and p.endswith('.bfarc.zs') and p != ARCHIVE)
+    existing = [str(args.mod / p) for p in archives if (args.mod / p).exists()]
+    if existing and not args.replace:
+        parser.error(f'{", ".join(existing)} already exist(s) (another mod\'s font archive, or an earlier run): '
+                     'pass --replace to overwrite')
     with (romfs / 'romfs.bin').open('rb') as image:
         def read(path):
             offset, size = index[path]; image.seek(offset); data = image.read(size); assert len(data) == size; return data
@@ -398,22 +428,40 @@ def main():
         pack = zstd.decompress(read('Pack/ZsDic.pack.zs'))
         for lo, hi in sarc_members(pack).values():
             d = zstd.ZstdDict(pack[lo:hi]); dictionaries[d.dict_id] = d
-        raw = read(ARCHIVE)
-    info = zstd.get_frame_info(raw); dictionary = dictionaries[info.dictionary_id]
-    archive = zstd.decompress(raw, zstd_dict=dictionary); assert len(archive) == info.decompressed_size
-    members = sarc_members(archive)
-    otf, key = bfotf_decode(archive[slice(*members[FONT])])
-    assert otf[:4] == b'OTTO', 'External.bfotf did not decode to an OpenType font'
-    text_fonts = [TTFont(io.BytesIO(bfotf_decode(archive[slice(*members[name])])[0])) for name in TEXT_FONTS]
-    new_otf, count = redraw(otf, text_fonts, args.style)
-    new_blob = bfotf_encode(new_otf, key); assert bfotf_decode(new_blob)[0] == new_otf
-    new_archive = repack(archive, FONT, new_blob)
-    data = zstd.compress(new_archive, level=19, zstd_dict=dictionary)
-    assert zstd.decompress(data, zstd_dict=dictionary) == new_archive
-    assert zstd.get_frame_info(data).dictionary_id == info.dictionary_id
+        raws = {path: read(path) for path in archives}
+        restbl = next(p for p in index if p.startswith('System/Resource/ResourceSizeTable.') and p.endswith('.rsizetable.zs'))
+        restbl_raw = read(restbl)
 
-    target = args.mod / ARCHIVE; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(data)
-    print(f'{target}: {count} icons redrawn ({args.style}), {len(data)} bytes')
+    text_fonts, redrawn, growth = None, {}, {}
+    for path in archives:
+        info = zstd.get_frame_info(raws[path]); dictionary = dictionaries[info.dictionary_id]
+        archive = zstd.decompress(raws[path], zstd_dict=dictionary); assert len(archive) == info.decompressed_size
+        members = sarc_members(archive)
+        if FONT not in members:
+            continue
+        if text_fonts is None:
+            text_fonts = [TTFont(io.BytesIO(bfotf_decode(archive[slice(*members[name])])[0])) for name in TEXT_FONTS]
+        otf, key = bfotf_decode(archive[slice(*members[FONT])])
+        assert otf[:4] == b'OTTO', f'External.bfotf in {path} did not decode to an OpenType font'
+        if otf not in redrawn:
+            redrawn[otf] = redraw(otf, text_fonts, args.style)
+        new_otf, count = redrawn[otf]
+        new_blob = bfotf_encode(new_otf, key); assert bfotf_decode(new_blob)[0] == new_otf
+        new_archive = repack(archive, FONT, new_blob)
+        data = zstd.compress(new_archive, level=19, zstd_dict=dictionary)
+        assert zstd.decompress(data, zstd_dict=dictionary) == new_archive
+        assert zstd.get_frame_info(data).dictionary_id == info.dictionary_id
+
+        growth[path] = len(new_archive) - len(archive)
+        target = args.mod / path; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(data)
+        print(f'{target}: {count} icons redrawn ({args.style}), {len(data)} bytes')
+
+    target = args.mod / restbl
+    original = zstd.decompress(restbl_raw)
+    table = zstd.decompress(target.read_bytes()) if target.exists() else original
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(zstd.compress(grow_restbl(table, original, growth), level=19))
+    print(f'{target}: ' + ', '.join(f'{p} {g:+d}' for p, g in growth.items()))
     found = write_manifest(args.mod, romfs)
     if found.misspelt:
         sys.exit('manifest not written: ' + ', '.join(f'{a} (the RomFS has {b})' for a, b in found.misspelt))

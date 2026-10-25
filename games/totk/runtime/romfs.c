@@ -227,7 +227,13 @@ static uint32_t overlay_slot(uint64_t i) {size_t lo=0,hi=noverlay;while(lo<hi){s
 static void overlay_init(void) {
  const char *dir=getenv("TOTK_ROMFS_PATCHES");if(!dir||strcmp(dir,"0"))overlay_load(dir?dir:"extracted/" TOTK_GAME_DIR "/romfs-patches",0,0);
  /* A scene bigger than 1600x900 (TOTK_RENDER_RES, 1.4.3) grows the same heaps: its overlay is <w>x<h>-scene-<sw>x<sh>. */
- unsigned w=1920,h=1080,sw,sh;if(runtime_output_res_extra_bytes()){runtime_output_res(&w,&h);const char *out=getenv("TOTK_ROMFS_PATCHES_OUT");char d[4096],scene[64]="";
+ /* Breath of the Wild has no HeapDef: its heaps are patched in the code (game_patches_botw.c patch_output_res). */
+#ifdef GAME_BOTW
+ unsigned w=1920,h=1080,sw,sh;if(0){
+#else
+ unsigned w=1920,h=1080,sw,sh;if(runtime_output_res_extra_bytes()){
+#endif
+  runtime_output_res(&w,&h);const char *out=getenv("TOTK_ROMFS_PATCHES_OUT");char d[4096],scene[64]="";
   if(runtime_render_res(&sw,&sh)&&(double)sw*sh>1600.0*900.0)snprintf(scene,sizeof(scene),"-scene-%ux%u",sw,sh);
   need(snprintf(d,sizeof(d),"%s/%ux%u%s",out?out:"extracted/" TOTK_GAME_DIR "/romfs-patches-out",w,h,scene)<(int)sizeof(d),"RomFS output overlay path");
   /* build_app.py makes the 2560x1440 canvas and, for 1.4.3, the 1920x1080 / 2560x1440 scenes on either canvas; other sizes are one command. */
@@ -252,8 +258,11 @@ void runtime_fs_init(void) {
  need(file_count<1000000&&strings_offset==24+file_count*24&&strings_offset<index_size,"RomFS index layout");
  const char *previous=NULL;
  for(uint64_t i=0;i<file_count;i++){Entry e=entry(i);need(e.offset<=ROMFS_IMAGE_SIZE&&e.size<=ROMFS_IMAGE_SIZE-e.offset,"RomFS file bounds");need(e.name<index_size-strings_offset&&e.len>1&&e.len<=index_size-strings_offset-e.name,"RomFS name bounds");const char *name=entry_name(e);need(name[e.len-1]==0&&strlen(name)==e.len-1&&(!previous||strcmp(previous,name)<0),"RomFS sorted paths");previous=name;}
- need(snprintf(path,sizeof(path),"%s/romfs.bin",dir)<(int)sizeof(path),"RomFS image path");image_fd=open(path,O_RDONLY);
- if(image_fd<0)open_chunks(dir);
+ /* TOTK_ROMFS_DATA: the folder of the image (romfs.bin or its parts) when it is not the index's: the phone keeps the 17 GB in
+    Documents/GameData (ios/Sources/main.m), so a new build of the app carries only the index and installs in minutes. */
+ const char *data=getenv("TOTK_ROMFS_DATA");if(!data||!*data)data=dir;
+ need(snprintf(path,sizeof(path),"%s/romfs.bin",data)<(int)sizeof(path),"RomFS image path");image_fd=open(path,O_RDONLY);
+ if(image_fd<0)open_chunks(data);
  else need(fstat(image_fd,&st)==0&&(uint64_t)st.st_size==ROMFS_IMAGE_SIZE,"RomFS image size");
  verify_image(image_fd,dir);
  if(!nchunks&&getenv("TOTK_ROMFS_MMAP")&&strcmp(getenv("TOTK_ROMFS_MMAP"),"0")){

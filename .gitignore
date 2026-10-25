@@ -1,6 +1,8 @@
 .DS_Store
 __pycache__/
 *.pyc
+# what players' iPhones / iPads noted for the shared shader list (ios/tools/shader_contrib_watch.py): sent in an issue, not committed
+/shader-list-contribution/
 # never commit keys or game files
 *.keys
 *.xci
@@ -24,3 +26,4 @@ games/totk/tools/totk_xlate/obj/
 games/totk/tools/totk_xlate/bin/
 games/totk/scripts/shader_inventory/obj/
 games/totk/scripts/shader_inventory/bin/
+ultracode.md

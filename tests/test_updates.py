@@ -32,6 +32,18 @@ def update_nca(managed=True, title=TITLE):
                     for i in range(6)) + data[0xc00:]
 
 
+def fake_venv(tree):
+    """A `.venv` whose python is this interpreter: build_app runs `<tree>/.venv/bin/python` for its scripts. Homebrew's
+    sys.prefix has no bin/python, so linking the prefix (as the tests did) only works on python.org installs. A script that
+    execs this interpreter by its own path, not a symlink: a venv's python finds its pyvenv.cfg (and so its packages,
+    cryptography among them) from the path it is started by."""
+    (tree/'.venv'/'bin').mkdir(parents=True, exist_ok=True)
+    (tree/'.venv'/'bin'/'python').write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    (tree/'.venv'/'bin'/'python').chmod(0o755)
+    (tree/'.venv'/'bin'/'nsz').write_text('#!/bin/sh\nexit 0\n')   # build_app.py runs .venv/bin/nsz for NSZ sources
+    (tree/'.venv'/'bin'/'nsz').chmod(0o755)
+
+
 def fake_data_bundle(tree, version, _logs, **_names):
     """build_app.data_bundle without the 16 GB image or codesign: an empty bundle folder."""
     bundle = tree / f'build/data-bundles/GameData-{version}.bundle'
@@ -75,7 +87,7 @@ class Updates(unittest.TestCase):
     def test_wrong_version_stops_before_rewrite(self):
         tree = self.root/'tree'; tree.mkdir()
         (tree/'scripts').symlink_to(SCRIPTS, target_is_directory=True)
-        (tree/'.venv').symlink_to(sys.prefix, target_is_directory=True)
+        fake_venv(tree)
         with patch.dict(build_app.UPDATED, {'exefs_sha256': {'main': build_app.UPDATED['exefs_sha256']['main']}}), self.assertRaisesRegex(build_app.BuildError, 'ExeFS main'):
             build_app.step_code(tree, self.update, self.keys, os.environ, self.root/'logs', version='v112')
         self.assertFalse((tree/'rewritten').exists())
@@ -84,7 +96,7 @@ class Updates(unittest.TestCase):
         tree = self.root/'tree'; tree.mkdir()
         (tree/'scripts').symlink_to(SCRIPTS, target_is_directory=True)
         (self.root/'botw').mkdir(); (self.root/'botw/scripts').symlink_to(SCRIPTS.parents[1]/'botw/scripts', target_is_directory=True)
-        (tree/'.venv').symlink_to(sys.prefix, target_is_directory=True)
+        fake_venv(tree)
         botw = self.root/'botw-update.nsp'
         botw.write_bytes(partition([('program.nca', update_nca(title=BOTW_TITLE)), ('common.tik', ticket())]))
         pins = {'exefs_sha256': {'main': build_app.BOTW190['exefs_sha256']['main']}, 'display_version': '1.9.0',
@@ -122,7 +134,7 @@ class Updates(unittest.TestCase):
         import hashlib
         tree = self.root/'tree'; tree.mkdir()
         (tree/'scripts').symlink_to(SCRIPTS, target_is_directory=True)
-        (tree/'.venv').symlink_to(sys.prefix, target_is_directory=True)
+        fake_venv(tree)
         # Deliberately misleading filename: selection must use the module bytes.
         source = self.root/'1.1.2.nsp'; source.write_bytes(self.update.read_bytes())
         expected = {name: hashlib.sha256(data).hexdigest() for name, data in (('main', b'synthetic main'), ('main.npdm', b'synthetic metadata'))}
@@ -256,13 +268,15 @@ class Updates(unittest.TestCase):
                     p=tree/rel;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(b'test')
                 import hashlib
                 (tree/f'build/shader-seed/{version}/seed-manifest.json').write_text(json.dumps(dict(
-                    version=version, chain='totk-native-v6-unverified', shaders=8000,
+                    version=version, chain='totk-native-v8-unverified', shaders=8000,
                     files={'pso_manifest.tsv':hashlib.sha256(b'test').hexdigest()})))
                 with patch.object(build_app, 'app_seal_valid', return_value=True), patch.object(build_app, 'sign_app') as signing:
                     build_app.step_app(tree,out,self.root/'logs',version=version)
                 signing.assert_called_once_with(out.with_name(out.name+'.partial'),self.root/'logs')
                 info=plistlib.loads((out/'Contents/Info.plist').read_bytes())
                 self.assertEqual(info['CFBundleShortVersionString'],display)
+                self.assertIn('zh-Hans',info['CFBundleLocalizations']);self.assertIn('zh-Hant',info['CFBundleLocalizations'])
+                self.assertEqual('pt-BR' in info['CFBundleLocalizations'],version=='v143')
                 res=out/'Contents/Resources/totk'
                 self.assertFalse((res/'build'/f'totk-native-{version}').exists())
                 self.assertTrue((res/'build/totk-native').exists())
@@ -278,7 +292,7 @@ class Updates(unittest.TestCase):
         import hashlib
         (tree/'build/shader-seed/v143/pso_manifest.tsv').write_bytes(b'test')
         (tree/'build/shader-seed/v143/seed-manifest.json').write_text(json.dumps(dict(
-            version='v143',chain='totk-native-v6-unverified',shaders=8000,
+            version='v143',chain='totk-native-v8-unverified',shaders=8000,
             files={'pso_manifest.tsv':hashlib.sha256(b'test').hexdigest()})))
         def fake_clone(_source, target):
             target.parent.mkdir(parents=True,exist_ok=True)
@@ -293,7 +307,7 @@ class Updates(unittest.TestCase):
         tree=self.root/'tree';out=self.root/'existing.app';out.mkdir()
         (out/'keep.txt').write_text('previous working app')
         seed=tree/'build/shader-seed/v143';seed.mkdir(parents=True)
-        (seed/'seed-manifest.json').write_text(json.dumps(dict(version='v112',chain='totk-native-v6-unverified',shaders=1,files={'x':'0'*64})))
+        (seed/'seed-manifest.json').write_text(json.dumps(dict(version='v112',chain='totk-native-v8-unverified',shaders=1,files={'x':'0'*64})))
         def fake_clone(_source, target):
             target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(b'synthetic payload')
         with patch.object(build_app,'clone',side_effect=fake_clone),patch.object(build_app,'app_seal_valid',return_value=True),patch.object(build_app,'sign_app') as signing:
@@ -309,7 +323,7 @@ class Updates(unittest.TestCase):
         old=out/'Contents/Resources/totk/build/totk-native';old.parent.mkdir(parents=True);old.write_bytes(b'old running app')
         seed=tree/'build/shader-seed/v143';seed.mkdir(parents=True)
         (seed/'pso_manifest.tsv').write_bytes(b'test')
-        (seed/'seed-manifest.json').write_text(json.dumps(dict(version='v143',chain='totk-native-v6-unverified',shaders=8000,
+        (seed/'seed-manifest.json').write_text(json.dumps(dict(version='v143',chain='totk-native-v8-unverified',shaders=8000,
             files={'pso_manifest.tsv':hashlib.sha256(b'test').hexdigest()})))
         def fake_clone(_source, target):
             target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(b'new app')

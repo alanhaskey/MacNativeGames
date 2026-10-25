@@ -34,7 +34,7 @@ static NSMutableDictionary<NSString *, id<MTLBinaryArchive>> *g_par_open; // ope
 static int g_par_on, g_par_valid;                                        // valid: files of this OS / GPU / chain exist
 static _Atomic uint64_t g_par_written, g_par_write_failed;
 static _Atomic int par_filling;                                          // the background fill (warm_fill_archive)
-static __thread int par_on_fill_thread;                                  // set on that fill's own thread: it writes in place
+static __thread int par_write_in_place;                                  // the fill's and the start-up warm-up's thread: they write at once
 
 static int par_enabled(void) {
     static int on = -1;
@@ -161,7 +161,7 @@ static id<MTLBinaryArchive> par_archive_for(id<MTLDevice> dev, NSString *key) {
     return a;
 }
 // One pipeline as its own file (a temporary name, then renamed). Adding compiles the pipeline once more, through the
-// compiler service the game uses too, so outside the fill this runs only while the game is idle (par_drain).
+// compiler service the game uses too, so only the fill and the start-up warm-up do it (par_add).
 static void par_write(id<MTLDevice> dev, NSString *key, id desc) {
     pthread_mutex_lock(&g_par_mu); BOOL have = [g_par_have containsObject:key]; pthread_mutex_unlock(&g_par_mu);
     if (have) return;   // another variant under the same key: keep the first
@@ -183,37 +183,8 @@ static void par_write(id<MTLDevice> dev, NSString *key, id desc) {
     uint64_t n = atomic_fetch_add(&g_par_written, 1) + 1;
     if (n % 500 == 0) MLOG("管线存档：这次已写 %llu 条（删掉 Metal 留下的工作目录 %llu 个）", (unsigned long long)n, (unsigned long long)atomic_load(&g_par_ga_removed));
 }
-enum { PAR_IDLE_NS = 3000000000u };
-static _Atomic uint64_t g_par_last_compile_ns;   // set by pso_new / cs_new when they compiled
-static int par_game_idle(void);                  // nvn_mtl.m: in the world, warm-up done, no compile for PAR_IDLE_NS
-static NSMutableArray *g_par_pending;             // @[key, descriptor copy] waiting for an idle moment
-static _Atomic int g_par_draining;
-static dispatch_queue_t par_queue(void) {
-    static dispatch_queue_t q; static dispatch_once_t once;
-    dispatch_once(&once, ^{ q = dispatch_queue_create("dm.nvn.pipeline-archive", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_BACKGROUND, 0)); });
-    return q;
-}
-// Every second while pipelines wait: when the game is idle, write one, then look again at once.
-static void par_drain(id<MTLDevice> dev) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)NSEC_PER_SEC), par_queue(), ^{
-        for (;;) {
-            if (!par_game_idle()) { par_drain(dev); return; }
-            NSArray *job = nil;
-            pthread_mutex_lock(&g_par_mu);
-            if (g_par_pending.count) { job = g_par_pending.firstObject; [g_par_pending removeObjectAtIndex:0]; }
-            pthread_mutex_unlock(&g_par_mu);
-            if (!job) { atomic_store(&g_par_draining, 0); return; }
-            @autoreleasepool { par_write(dev, job[0], job[1]); }
-        }
-    });
-}
-// Called after a pipeline the archive did not have was compiled.
+// Called after a pipeline the archive did not have was compiled. The warm-up writes it at once; one compiled in play is in
+// pso_user.tsv, so the next start's warm-up builds it and writes it then.
 static void par_add(id<MTLDevice> dev, NSString *key, id desc) {
-    if (!g_par_on || !key) return;
-    if (par_on_fill_thread) { par_write(dev, key, desc); return; }
-    pthread_mutex_lock(&g_par_mu);
-    if (!g_par_pending) g_par_pending = [NSMutableArray array];
-    [g_par_pending addObject:@[key, [desc copy]]];
-    pthread_mutex_unlock(&g_par_mu);
-    if (!atomic_exchange(&g_par_draining, 1)) par_drain(dev);
+    if (g_par_on && key && par_write_in_place) par_write(dev, key, desc);
 }

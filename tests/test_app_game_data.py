@@ -2,6 +2,8 @@
 and times, so the runtime's RomFS verification record (runtime/romfs.c) still matches and the first start after a
 packaging does not hash 16 GB again."""
 import os
+import errno
+from unittest import mock
 from pathlib import Path
 import tempfile
 import unittest
@@ -127,6 +129,134 @@ class InstallApp(unittest.TestCase):
         old = self.removed[0]
         self.assertEqual((old/'Contents/Helpers/GameData-v143.bundle/Contents/_CodeSignature/CodeResources').read_bytes(),
                          b'another seal')   # the replaced contents, outside the app, are what is removed
+
+    def test_failed_moves_restore_both_apps(self):
+        for same_data in (True, False):
+            for fail_at in range(1, 5 if same_data else 3):
+                with self.subTest(same_data=same_data, fail_at=fail_at), tempfile.TemporaryDirectory() as tmp:
+                    out, new = Path(tmp)/'Game.app', Path(tmp)/'Game.app.partial'
+                    old_image = data_bundle(out)/IMAGE
+                    new_image = data_bundle(new, seal=b'seal' if same_data else b'other')/IMAGE
+                    old_id, new_id = identity(old_image), identity(new_image)
+                    folder_id = out.stat().st_ino
+                    rename = Path.rename
+                    calls = []
+                    def failing_move(source, target):
+                        calls.append((source, target))
+                        if len(calls) == fail_at:
+                            raise OSError(errno.EIO, 'injected move failure')
+                        return rename(source, target)
+                    removed = []
+                    with mock.patch.object(Path, 'rename', failing_move):
+                        try:
+                            build_app.install_app(new, out, verify=lambda _: True, remove=removed.append)
+                        except OSError:
+                            self.assertEqual(identity(old_image), old_id)
+                            self.assertEqual(identity(new_image), new_id)
+                            self.assertEqual(out.stat().st_ino, folder_id)
+                            self.assertEqual(removed, [])
+                        else:
+                            self.assertTrue(same_data and fail_at == 2, 'only reuse failure may fall back')
+                            # Failure to reuse a data bundle may fall back to the fresh copy.
+                            self.assertTrue((out/'Contents/Helpers/GameData-v143.bundle'/IMAGE).is_file())
+
+    def test_verifier_exception_restores_reused_data(self):
+        old_image = data_bundle(self.out)/IMAGE
+        new_image = data_bundle(self.new)/IMAGE
+        old_id, new_id = identity(old_image), identity(new_image)
+        with self.assertRaisesRegex(OSError, 'verification failed'):
+            build_app.install_app(self.new, self.out,
+                                  verify=mock.Mock(side_effect=OSError('verification failed')),
+                                  remove=self.removed.append)
+        self.assertEqual(identity(old_image), old_id)
+        self.assertEqual(identity(new_image), new_id)
+        self.assertEqual(self.removed, [])
+
+    def test_failure_after_contents_promotion_restores_both_apps(self):
+        old_image = data_bundle(self.out)/IMAGE
+        new_image = data_bundle(self.new)/IMAGE
+        old_id, new_id = identity(old_image), identity(new_image)
+        rmdir = Path.rmdir
+        def fail(path):
+            if path == self.new:
+                raise OSError('cannot remove staging directory')
+            return rmdir(path)
+        with mock.patch.object(Path, 'rmdir', fail), self.assertRaises(OSError):
+            self.install()
+        self.assertEqual(identity(old_image), old_id)
+        self.assertEqual(identity(new_image), new_id)
+        self.assertEqual(self.removed, [])
+        self.assertTrue(self.install(), 'a restored update can be retried')
+
+    def test_later_bundle_verification_failure_restores_earlier_bundle(self):
+        originals = []
+        for name in ('GameData-v112.bundle', 'GameData-v143.bundle'):
+            for app in (self.out, self.new):
+                path = data_bundle(app, name=name)/IMAGE
+                originals.append((path, identity(path)))
+        verify = mock.Mock(side_effect=[True, OSError('second verification failed')])
+        with self.assertRaises(OSError):
+            build_app.install_app(self.new, self.out, verify=verify, remove=self.removed.append)
+        for path, before in originals:
+            self.assertEqual(identity(path), before)
+        self.assertEqual(self.removed, [])
+
+    def test_failure_after_one_new_entry_restores_all_entries(self):
+        data_bundle(self.out); data_bundle(self.new)
+        (self.out/'old-note').write_text('old')
+        (self.new/'new-note').write_text('new')
+        def snapshot(root):
+            return {str(p.relative_to(root)): (p.read_bytes(), p.stat().st_ino)
+                    for p in root.rglob('*') if p.is_file()}
+        old_files, new_files = snapshot(self.out), snapshot(self.new)
+        rename, promoted = Path.rename, []
+        def fail(source, target):
+            if source.parent == self.new:
+                if promoted:
+                    raise OSError('second entry failed')
+                promoted.append(source)
+            return rename(source, target)
+        with mock.patch.object(Path, 'rename', fail), self.assertRaises(OSError):
+            self.install()
+        self.assertEqual(snapshot(self.out), old_files)
+        self.assertEqual(snapshot(self.new), new_files)
+        self.assertEqual(self.removed, [])
+
+    def test_failed_first_install_keeps_staged_app(self):
+        image = data_bundle(self.new)/IMAGE
+        before = identity(image)
+        with mock.patch.object(Path, 'rename', side_effect=OSError('cannot publish')), self.assertRaises(OSError):
+            self.install()
+        self.assertFalse(self.out.exists())
+        self.assertEqual(identity(image), before)
+        self.assertEqual(self.removed, [])
+
+    def test_rollback_failure_preserves_files_and_reports_recovery_path(self):
+        old_image = data_bundle(self.out)/IMAGE
+        data_bundle(self.new)
+        old_id = identity(old_image)
+        rename = Path.rename
+        def fail(source, target):
+            if source == self.new/'Contents' or source.name == 'Contents' and '.replaced-' in source.parent.name:
+                raise OSError('injected persistent I/O failure')
+            return rename(source, target)
+        with mock.patch.object(Path, 'rename', fail), self.assertRaisesRegex(build_app.BuildError, 'recover.*before rebuilding'):
+            self.install()
+        self.assertEqual(identity(self.new/'Contents/Helpers/GameData-v143.bundle'/IMAGE), old_id)
+        self.assertTrue(list(self.root.glob('*.fresh')))
+        self.assertTrue(list(self.root.glob('*.replaced-*')))
+        self.assertEqual(self.removed, [])
+
+    def test_fresh_copy_cleanup_failure_does_not_undo_a_complete_install(self):
+        old_image = data_bundle(self.out)/IMAGE
+        data_bundle(self.new)
+        before = identity(old_image)
+        with mock.patch.object(build_app, 'remove_tree', side_effect=OSError('cleanup failed')), \
+                mock.patch.object(build_app, 'say') as warning:
+            self.assertTrue(self.install())
+        self.assertEqual(identity(old_image), before)
+        self.assertTrue(list(self.root.glob('*.fresh')))
+        self.assertIn('cleanup failed', warning.call_args[0][0])
 
     def test_leftovers_of_an_earlier_install_are_removed_too(self):
         (self.root/'Game.app.replaced-1').mkdir()

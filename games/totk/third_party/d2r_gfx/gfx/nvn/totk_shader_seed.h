@@ -39,6 +39,10 @@ static NSString *totk_seed_fingerprint(NSDictionary *m, NSArray<NSString *> *nam
 static BOOL totk_seed_sealed(NSString *source) {
     NSString *path = source.isAbsolutePath ? source : [NSFileManager.defaultManager.currentDirectoryPath stringByAppendingPathComponent:source];
 #if TARGET_OS_IPHONE
+    /* A seed install_device.py put into Documents (ios/Sources/main.m sets TOTK_SHADER_SEED_PUSHED only once its marker,
+       written after the whole folder, names it): checked by the Mac that built it, and read in place like the bundle's. */
+    const char *pushed = getenv("TOTK_SHADER_SEED_PUSHED");
+    if (pushed && *pushed && [path.stringByResolvingSymlinksInPath isEqualToString:@(pushed).stringByResolvingSymlinksInPath]) return YES;
     NSString *bundle = NSBundle.mainBundle.bundlePath.stringByResolvingSymlinksInPath;
     return bundle.length && [path.stringByResolvingSymlinksInPath hasPrefix:[bundle stringByAppendingString:@"/"]];
 #else

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Bind a native loader to verified v0 images; generated tables stay local."""
+"""Bind the native loader to the verified images: build/game-data/<version>/runtime-tables.bin (stays local).
+
+The loader reads the file at start (runtime/loader.c load_tables), so the program itself holds nothing of the game."""
 import argparse
 import hashlib
 import json
@@ -12,15 +14,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'third_party/d2r'))
 from relr import decode_relr
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--version', choices=('v0','v112','v121','v143','botw160','botw190'), default='v0')
+parser.add_argument('--version', choices=('v0','v121','v143','botw160','botw190','dkb','pkp'), default='v0')
 version = parser.parse_args().version
-OUT = ROOT / ('build' if version == 'v0' else f'build/{version}')
+OUT = ROOT / f'build/game-data/{version}'
 OUT.mkdir(parents=True, exist_ok=True)
 report = json.loads((ROOT / ('analysis/phase12-validation.json' if version == 'v0' else f'analysis/{version}-port/phase12-validation.json')).read_text())
 assert report['status'] == 'pass' and report['rom_version'] == version
-if version == 'v112':
-    expected = 'f04fbebdaacbcde0bcca20cbe0caff06bd51f7c8f904d217e5f17efe3308d1ac'
-    assert report['module_file_sha256']['extracted/v112/exefs/main'] == expected, 'Unsupported 1.1.2 main image'
 if version == 'v121':
     assert report['module_file_sha256']['extracted/v121/exefs/main'] == 'e5aa8d48e68cbb82ed4416c7b6b29a46fe4a998ee149d6dbf979164c628efcb6', 'Unsupported 1.2.1 main image'
 if version == 'botw160':   # Breath of the Wild 1.6.0 (botw.md)
@@ -30,7 +29,9 @@ if version == 'botw190':   # Breath of the Wild 1.9.0 (docs/botw-v1.9.0-port.md)
 if version == 'v143':
     assert report['module_file_sha256']['extracted/v143/exefs/main'] == 'e84a90d551fed0824b4b74933b9c6d043c458521363a7cea58b2faca1822dc9e', 'Unsupported 1.4.3 main image'
 modules = []
-for name in ['main', 'subsdk0', 'sdk']:
+# main first (the loader patches modules[0]), then the subsdk modules this title ships, sdk last (games/wonder's rule)
+names = ['main', *(f'subsdk{i}' for i in range(10) if (ROOT / f'rewritten/{version}/subsdk{i}.patched.bin').is_file()), 'sdk']
+for name in names:
     path = ROOT / f'rewritten/{version}/{name}.patched.bin'
     image = path.read_bytes()
     digest = hashlib.sha256(image).hexdigest()
@@ -83,15 +84,30 @@ for name in ['main', 'subsdk0', 'sdk']:
     gates = []
     for line in (ROOT / f'rewritten/{version}/{name}.gates.tsv').read_text().splitlines():
         ret, kind, arg, original = line.split()
-        assert kind in ['cntpct', 'cntvct', 'svc']
-        gates.append(dict(ret=int(ret, 0), timer=kind != 'svc', arg=int(arg), original=int(original, 0)))
+        assert kind in ['cntpct', 'cntvct', 'svc', 'spin']
+        # timer: 0 svc, 1 cntpct / cntvct, 2 spin wait (patch_nso.py "Spin waits"; threads.c runtime_spin_wait)
+        gates.append(dict(ret=int(ret, 0), timer={'svc': 0, 'spin': 2}.get(kind, 1), arg=int(arg), original=int(original, 0)))
+    gates.sort(key=lambda g: g['ret'])   # loader.c runtime_dispatch looks a return address up by binary search
+    assert len({g['ret'] for g in gates}) == len(gates), 'duplicate gate return address'
     # Match each compiler's actual DT_INIT state load before decoding it.
-    flag_reg, load_offset = (19, 20) if version in ('v143', 'botw160', 'botw190') else (20, 24)
-    a, w = struct.unpack_from('<I', image, tags[12]+16)[0], struct.unpack_from('<I', image, tags[12]+load_offset)[0]
-    assert a & 0x9f00001f == 0x90000000 | flag_reg and w & 0xffc003ff == 0xb9400008 | (flag_reg << 5)
+    # DT_INIT's prologue loads its state word: adrp xR, then within three instructions ldr w8, [xR, #imm]. Where depends on
+    # the compiler (TotK 1.0.0 / 1.2.1: x20 at +16 / +24; 1.4.3 and BotW: x19 at +16 / +20; Switch 2 modules start with
+    # pacibsp: x19 at +20 / +24), so the first such pair in the prologue's first 16 instructions is taken.
+    found = None
+    for k in range(16):
+        at = tags[12] + 4 * k
+        a = struct.unpack_from('<I', image, at)[0]
+        if a & 0x9f000000 != 0x90000000: continue
+        reg = a & 31
+        for j in range(1, 4):
+            w = struct.unpack_from('<I', image, at + 4 * j)[0]
+            if w & 0xffc003ff == 0xb9400008 | (reg << 5): found = (at, a, w); break
+        if found: break
+    assert found, f'{name}: DT_INIT state load not found'
+    at, a, w = found
     imm = ((a >> 29) & 3) | (((a >> 5) & 0x7ffff) << 2)
     imm = (imm ^ (1 << 20)) - (1 << 20)
-    ctor_flag = ((tags[12]+16) & ~4095) + (imm << 12) + ((w >> 10) & 0xfff)*4
+    ctor_flag = (at & ~4095) + (imm << 12) + ((w >> 10) & 0xfff)*4
     assert layout['DATA_OFF'] <= ctor_flag < layout['KEY_PAGE_OFF']
     modules.append(dict(name=name, sha256=digest, size=len(image), ctor_flag=ctor_flag, layout=layout, tags=tags,
                         symbols=symbols, relocs=relocs, gates=gates))
@@ -113,25 +129,47 @@ assert len(plt) == 1, f'PLT matches {plt}'
 main['probe_plt'] = plt[0]
 main['probe_slot'] = slot
 
-lines = ['/* Generated locally from validated player images; do not commit. */']
-for n, m in enumerate(modules):
-    lines.append(f'static const Reloc reloc_{n}[] = {{')
-    lines.extend(f'{{{r["where"]}ULL,{r["kind"]},{r["symbol"]},{r["addend"]}LL}},' for r in m['relocs'])
-    lines.append('};')
-    lines.append(f'static const Symbol symbol_{n}[] = {{')
-    lines.extend('{' + f'{json.dumps(s["name"])},{s["value"]}ULL,{s["size"]}ULL,{int(s["defined"])},{s["binding"]},{s["type"]}' + '},' for s in m['symbols'])
-    lines.append('};')
-    lines.append(f'static const Gate gate_{n}[] = {{')
-    lines.extend(f'{{{g["ret"]}ULL,{g["original"]}ULL,{g["timer"]!s},{g["arg"]}}},'.replace('True','1').replace('False','0') for g in m['gates'])
-    if not m['gates']: lines.append('{0,0,0,0},')
-    lines.append('};')
-lines.append('static Module modules[] = {')
-for n, m in enumerate(modules):
-    l = m['layout']
-    lines.append('{' + f'.name={json.dumps(m["name"])},.digest={json.dumps(m["sha256"])},.file_size={m["size"]}ULL,.text_end={l["TEXT_END"]}ULL,.ro_off={l["RO_OFF"]}ULL,.data_off={l["DATA_OFF"]}ULL,.patch_off={l["PATCH_OFF"]}ULL,.key_off={l["KEY_PAGE_OFF"]}ULL,.symbols=symbol_{n},.nsym={len(m["symbols"])},.relocs=reloc_{n},.nreloc={len(m["relocs"])},.gates=gate_{n},.ngate={len(m["gates"])},.init={m["tags"].get(12,0)}ULL,.ctor_flag={m["ctor_flag"]}ULL,.init_array={m["tags"].get(25,0)}ULL,.init_size={m["tags"].get(27,0)}ULL' + '},')
-lines.append('};')
-lines.append(f'#define PROBE_PLT {main["probe_plt"]}ULL\n#define PROBE_SLOT {slot}ULL')
-(OUT / 'runtime_tables.h').write_text('\n'.join(lines) + '\n')
+# runtime-tables.bin in the layouts of runtime/loader.c load_tables: a 64-byte header, one 208-byte record per module, each
+# module's symbols, relocations and gates (24 bytes each, 8-byte aligned), then the symbol names.
+HEADER, RECORD = 64, 208
+strings, arrays, records = bytearray(), bytearray(), []
+def place(blob):
+    arrays.extend(bytes(-len(arrays) % 8))
+    arrays.extend(blob)
+    return HEADER + RECORD * len(modules) + len(arrays) - len(blob)
+for m in modules:
+    names = []
+    for s in m['symbols']:
+        names.append(len(strings))
+        strings.extend(s['name'].encode() + b'\0')
+    symbols = b''.join(struct.pack('<QQIBBBx', s['value'], s['size'], n, int(s['defined']), s['binding'], s['type'])
+                       for s, n in zip(m['symbols'], names))
+    relocs = b''.join(struct.pack('<QIIq', r['where'], r['kind'], r['symbol'], r['addend']) for r in m['relocs'])
+    gates = b''.join(struct.pack('<QQII', g['ret'], g['original'], int(g['timer']), g['arg']) for g in m['gates'])
+    l, t = m['layout'], m['tags']
+    records.append(struct.pack('<16s72s13Q4I', m['name'].encode(), m['sha256'].encode(), m['size'], l['TEXT_END'], l['RO_OFF'],
+                               l['DATA_OFF'], l['PATCH_OFF'] % 2**64, l['KEY_PAGE_OFF'], t.get(12, 0), m['ctor_flag'], t.get(25, 0),
+                               t.get(27, 0), place(symbols), place(relocs), place(gates), len(m['symbols']), len(m['relocs']),
+                               len(m['gates']), 0))
+arrays.extend(bytes(-len(arrays) % 8))
+strings_offset = HEADER + RECORD * len(modules) + len(arrays)
+size = strings_offset + len(strings)
+header = struct.pack('<8s8sIIQQQQQ', b'TOTKTAB1', version.encode(), len(modules), 1, main['probe_plt'], slot, strings_offset,
+                     len(strings), size)
+assert len(header) == HEADER and all(len(r) == RECORD for r in records)
+tables = OUT / 'runtime-tables.bin'
+tables.with_suffix('.partial').write_bytes(header + b''.join(records) + arrays + strings)
+tables.with_suffix('.partial').replace(tables)
+# The patch_nso.py that rewrote these modules (it records its own SHA-256 next to them): update_runtime.py refuses an app
+# whose rewriter is not the repository's, since a runtime can rely on gates and fixes a newer rewriter puts in the code.
+rewriter = (ROOT / f'rewritten/{version}/build_src.sha256').read_text().split()[0]
+assert len(rewriter) == 64 and all(c in '0123456789abcdef' for c in rewriter), 'build_src.sha256'
+# The process's declarations from its NPDM (META header, +0x14 the system resource size): GetInfo 16 on a Switch 2 game
+# (runtime/services.c SYSTEM_RESOURCE_BUDGET).
+npdm = (ROOT / f'extracted/{version}/exefs/main.npdm').read_bytes()
+assert npdm[:4] == b'META', 'main.npdm'
+(OUT / 'process.txt').write_text(f'# From main.npdm\nSYSTEM_RESOURCE_SIZE {struct.unpack_from("<I", npdm, 0x14)[0]}\n')
+(OUT / 'rewriter.txt').write_text(f'# SHA-256 of the patch_nso.py that rewrote rewritten/{version}\nREWRITER_SHA256 {rewriter}\n')
 # Details are evidence, not additional source code.
 (ROOT / ('analysis/runtime-layout.json' if version == 'v0' else f'analysis/{version}-port/runtime-layout.json')).write_text(json.dumps(modules, indent=2) + '\n')
 print(json.dumps(dict(modules=len(modules), relocations=sum(len(m['relocs']) for m in modules), original_main_plt=hex(plt[0]), original_main_slot=hex(slot))))

@@ -8,9 +8,9 @@ a loader, the operating system's services, and a graphics driver.
 The Switch and Apple silicon are both ARM64, so almost every instruction of the game runs as it is. A few things
 macOS does not allow are rewritten ahead of time (`patch_nso.py`): the platform register x18, the thread pointer
 register, system calls (`svc`), and the counter registers. Each one becomes a short jump into a stub that does the same
-thing for macOS. The rewrites of versions 1.0.0, 1.1.2 and 1.4.3 were verified site by site (every rewritten site executed with random
+thing for macOS. The rewrites of versions 1.0.0, 1.1.2 (support removed 2026-11-02) and 1.4.3 were verified site by site (every rewritten site executed with random
 inputs against the original in an emulator, with negative controls); the build checks that your rewrite is byte for
-byte the selected version (`games/totk/assets/expected-v1.0.0.json` / `expected-v1.1.2.json` / `expected-v1.4.3.json`).
+byte the selected version (`games/totk/assets/expected-v1.0.0.json` / `expected-v1.2.1.json` / `expected-v1.4.3.json`).
 
 The rewrites are what makes the code the app's own: it is bound by SHA-256, so a patch cannot be applied while the game
 runs. A player mod that changes the code therefore merges its main-module patches *before* that step
@@ -111,7 +111,7 @@ Over the 18,064 startup variants of a 1.4.3 build, the patched translator change
 
 Many surfaces are drawn twice: a depth prepass (alpha test, depth written) and then the G-buffer pass, which colours only the samples whose depth is EQUAL to the prepass's and writes no depth. The material fragment shaders of the G-buffer pass also store a per-tile flag to memory. A Metal fragment function that stores to memory has its depth test after it runs, unless it declares `[[early_fragment_tests]]`, and on Apple GPUs that late test saw a depth an ulp away from the one the prepass wrote along contour lines: the G-buffer kept its clear value there, and the stone lattice in front of the Great Sky Island start was covered in rows of dark dots (every resolution). The two vertex functions compute bit-identical positions, in the MSL and in the compiled AIR, and `preserveInvariance` changed nothing.
 
-On the Switch these shaders test depth first. Byte `+0x718` of a fragment shader's NVN control section is its early-fragment-tests flag: the game's NVN driver reads it with the other fragment flags at `+0x719..+0x71d`, and Ryujinx receives it as the 3D engine's `EarlyZForce`. The runtime's translation requests and `prepare_shader_seed.py` pass it as `early_fragment_tests` (0x880-byte sections only; Breath of the Wild's shorter ones are not read), and `totk_xlate` gives it to the Ryujinx translator, whose SPIR-V then declares `EarlyFragmentTests` and the MSL `[[early_fragment_tests]]`. Of the 13,645 fragment shaders of 1.4.3, 1,677 set the flag, among them 775 of the 840 that store without discarding; none of them writes depth or a sample mask. The flagged shaders' MSL changes under the same variant names, so the translation chain went from `totk-native-v7-unverified` to `totk-native-v8-unverified`: a v7 cache would keep serving them without the attribute.
+On the Switch these shaders test depth first. Byte `+0x718` of a fragment shader's NVN control section is its early-fragment-tests flag: the game's NVN driver reads it with the other fragment flags at `+0x719..+0x71d`, and Ryujinx receives it as the 3D engine's `EarlyZForce`. The runtime's translation requests and `prepare_shader_seed.py` pass it as `early_fragment_tests` (0x880-byte sections only; Breath of the Wild's shorter ones are not read), and `totk_xlate` gives it to the Ryujinx translator, whose SPIR-V then declares `EarlyFragmentTests` and the MSL `[[early_fragment_tests]]`. Of the 13,645 fragment shaders of 1.4.3, 1,677 set the flag, among them 775 of the 840 that store without discarding; none of them writes depth or a sample mask. The flagged shaders' MSL changes under the same variant names, so the translation chain went from `totk-native-v7-unverified` to `totk-native-v8-unverified`: a v7 cache would keep serving them without the attribute. The Switch 2 work (`docs/ns2-port.md`) took it to `totk-native-v9-unverified`: the translator now writes `precise::` for min, max and clamp, and one change of nxnative's goto elimination drops a loop that wrapped 48 of TotK 1.4.3's 8,673 variants without a jump back; both change MSL under the same variant names.
 
 ## Buffer copies through aliased memory
 
@@ -156,7 +156,7 @@ is also `read()` is refused. The original game's 1.2.1 report found the squares 
    BFTTF files). Actual font bytes and the complete manifest are verified before reuse. Then the
    RomFS overlays (small data patches: quick-menu capture timing at high frame rates, the game-over retry, the heap
    sizes the 1440p output needs) are made from your own files. The game-over retry patch only matters on 1.0.0:
-   1.1.2 and 1.4.3 read Nintendo's own fixed flow (`DmF_SY_GameOver.110`), so there the patch of the old file is made
+   1.2.1 and 1.4.3 read Nintendo's own fixed flow (`DmF_SY_GameOver.110`), so there the patch of the old file is made
    and checked but never read. At start the runtime also loads player mods from
    `~/Library/Application Support/MacNativeGames/TOTK/mods/<version>` in the same manifest format, after the build's
    overlays. Every listed file is hashed at start, and each one is opened only when the game opens it. A line whose
@@ -166,7 +166,10 @@ is also `read()` is refused. The original game's 1.2.1 report found the squares 
    reads dictionary-compressed startup packages from the selected, verified RomFS, parses supported NVN BNSH programs
    and translates default-binding variants. The version, translation chain, translator/preparer hashes and every
    output file are checked before cache reuse and packaging. No prior user shader cache is read.
-4. The game binary built against your extracted files (it checks their hashes at every start) and everything put into
+4. The game binary built from this repository alone, and the game data folder (`build/game-data/<version>`: the
+   modules' symbols, relocations and gates, the RomFS / add-on content / shared-font sizes and SHA-256) made from your
+   extracted files; the game binary reads that folder at every start and checks your files against it
+   (`games/totk/runtime/game_data.h`), so nothing of the game is compiled into it. Everything is put into
    an app bundle; the app's launcher points the game at your profile, cache and log folders. The builder seals and
    strictly verifies the complete bundle before replacing the previous app, then refreshes its LaunchServices record.
 
@@ -177,7 +180,7 @@ outside the app, so playing does not change the signed resources. A full verific
 image's file identity and modification metadata match; `TOTK_ROMFS_VERIFY=full` forces a fresh SHA-256 check.
 
 The output is macOS-only: Apple silicon, macOS 26 or later, and an AppKit launcher. There is no iPhone/iOS build option.
-The separate cumulative 1.1.2 and 1.4.3 updates are accepted with `--update` (NSP or NSZ). NSZ updates are decompressed and their NCA hashes verified locally. Other versions, DLC, combined packages, personalized tickets and compressed base games (NSZ/XCZ) remain unsupported.
+The separate cumulative 1.2.1 and 1.4.3 updates are accepted with `--update` (NSP or NSZ). NSZ updates are decompressed and their NCA hashes verified locally. Other versions, DLC, combined packages, personalized tickets and compressed base games (NSZ/XCZ) remain unsupported.
 Changing an input path, size, or modification time invalidates the extraction manifest, including its NCA offsets;
 verified version-specific output can still be reused after the new input's code passes the hash checks.
 
@@ -193,14 +196,14 @@ Container tests use generated encrypted fixtures with no game data or real keys:
 
 The pinned hactool commit `1d64a83450e025622f3468c28fc4164dad2c5ef6` merges the base and update Program NCAs. The build adds a small explicit title-key-file hook (`MNG_TITLE_KEYS`): temporary common tickets for both inputs stay in a 0600 file under a private temporary directory, and are removed on success or failure. It does not edit the player's key store or pass keys in process arguments. A bounded-input hook (`MNG_BASE_RANGE_OFFSET` / `MNG_BASE_RANGE_SIZE`) reads the original container's base NCA in place, preventing a second temporary 17 GB base copy; only the update NCA is extracted. All six IVFC levels must verify, then the final image must match the selected version's SHA-256. The hactool output uses `--sectionN`, because `--romfs` does not export this BKTR section.
 
-Runtime addresses, resource overlays, generated headers and modules are selected together. The app contains one executable and one selected data set; its launcher is compiled for that same version and `--check` verifies the bundle's version metadata. The normal window title reports the version. Saves keep their existing location, with an atomic full pre-upgrade backup before the first 1.1.2 or 1.4.3 launch.
+Runtime addresses, resource overlays, the game data folder and modules are selected together. The app contains one executable and one selected data set; its launcher is compiled for that same version and `--check` verifies the bundle's version metadata. The normal window title reports the version. Saves keep their existing location, with an atomic full pre-upgrade backup before the first 1.1.2 or 1.4.3 launch.
 
-The exact 1.1.2 visibility-counter vertex shader needs a targeted lowering: each passing vertex atomically adds one instead of using a subgroup ballot/reduction. The original atomic side effect is retained, and the code SHA-256 limits this transformation to the analysed shader. This is not a general subgroup fallback. The native prebuilt translator is rebuilt from the checked-in source and has an updated SHA-256.
+The exact visibility-counter vertex shader of 1.2.1 (the same as 1.1.2's) needs a targeted lowering: each passing vertex atomically adds one instead of using a subgroup ballot/reduction. The original atomic side effect is retained, and the code SHA-256 limits this transformation to the analysed shader. This is not a general subgroup fallback. The native prebuilt translator is rebuilt from the checked-in source and has an updated SHA-256.
 
 The 1.4.3 compiler also emits packed RELR relocations, GNU-hash-only SDK modules, and additional x18/atomic instruction windows. Its runtime uses a separately guarded frame/output patch table, the new SDK's logical permissions and locks, and REV15 audio wire layouts with floating biquads. Its instance-based visibility counter has a separate exact-hash lowering; both old/new variants pass 96 native GPU cases. The new EASU shader is separately checked before admitting it to the manual MetalFX HDR path. Current validation and remaining gameplay tests are recorded in [the 1.4.3 port notes](v1.4.3-port.md).
 
 <a id="112-validation"></a>
-## 1.1.2 validation
+## 1.1.2 validation (historical: 1.1.2 support was removed on 2026-11-02)
 
 The development runtime passed 55,018 rewrite-site checks and 600 negative controls, native loader/boot/resource probes, 96 real GPU vertex-counter cases with an intentionally wrong-count negative control, and basic Mac gameplay. These are scoped checks, not full-game or performance acceptance.
 

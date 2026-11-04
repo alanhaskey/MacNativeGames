@@ -1,7 +1,7 @@
 /* Read-only game RomFS, backed by the player's fully IVFC-verified image. */
 #include "runtime.h"
 #include "totk_ui_lang.h"
-#include "romfs_config.h"
+#include "game_data.h"
 #include "game_version.h"
 #include "fs_host.h"
 #include "romfs_path.h"
@@ -20,6 +20,12 @@
 #define UNSUPPORTED 0x6402u
 #define INVALID 0xe402u
 #define NH 65536
+/* The image's size and SHA-256 and the index's SHA-256 from the player's verified extraction: romfs-config.txt in the game
+   data folder (game_data.h, scripts/prepare_romfs_backend.py), read when the RomFS is opened. */
+static uint64_t romfs_image_size;static const char *romfs_image_sha256,*romfs_index_sha256;
+#define ROMFS_IMAGE_SIZE romfs_image_size
+#define ROMFS_IMAGE_SHA256 romfs_image_sha256
+#define ROMFS_INDEX_SHA256 romfs_index_sha256
 static uint8_t *index_bytes;
 static size_t index_size;
 static uint64_t file_count,strings_offset;
@@ -250,6 +256,8 @@ static void overlay_init(void) {
 }
 void runtime_fs_init(void) {
  if(image_fd>=0)return;
+ romfs_image_size=runtime_game_number("romfs-config.txt","ROMFS_IMAGE_SIZE");romfs_image_sha256=runtime_game_sha256("romfs-config.txt","ROMFS_IMAGE_SHA256");
+ romfs_index_sha256=runtime_game_sha256("romfs-config.txt","ROMFS_INDEX_SHA256");
  const char *dir=getenv("TOTK_ROMFS");if(!dir)dir="extracted/" TOTK_GAME_DIR "/romfs";char path[4096];
  need(snprintf(path,sizeof(path),"%s/runtime-index.bin",dir)<(int)sizeof(path),"RomFS path");int fd=open(path,O_RDONLY);need(fd>=0,"RomFS index missing");
  struct stat st;need(fstat(fd,&st)==0&&st.st_size>=24&&st.st_size<128*1024*1024,"RomFS index size");runtime_boot_progress(TOTK_UI("读取资源索引","Reading the data index"),0,0);sha_fd(fd,ROMFS_INDEX_SHA256,0,NULL);
@@ -284,6 +292,10 @@ static unsigned mount_rom(const char *name,void *cache,uint64_t size) {
  if(*mount_name&&strcmp(name,mount_name))runtime_fail("second RomFS mount not implemented");strcpy(mount_name,name);return 0;
 }
 static unsigned cache_size(uint64_t *out) {if(!out)return INVALID;*out=0;return 0;}
+/* SDK 20's forms (Pokemon Pokopia): MountRom without a cache, and with a program index (0: the application's own RomFS). */
+static unsigned mount_rom_nocache(const char *name) {return mount_rom(name,NULL,0);}
+static unsigned mount_rom_index(const char *name,int index,void *cache,uint64_t size) {if(index)runtime_fail("MountRom of another program index not implemented");return mount_rom(name,cache,size);}
+static unsigned cache_size_index(uint64_t *out,int index) {(void)index;return cache_size(out);}
 /* TOTK_FS_LOG=1: log every RomFS open with the time since start (shows how far the game gets without a picture). */
 static void fs_log(const char *what,const char *path){static int on=-1;static uint64_t t0;if(on<0){on=getenv("TOTK_FS_LOG")!=NULL;t0=runtime_now_ns();}if(on)fprintf(stderr,"[totk-fs] %8.3f %s %s\n",(runtime_now_ns()-t0)/1e9,what,path);}
 void runtime_fs_log(const char *what,const char *path){fs_log(what,path);}
@@ -328,7 +340,8 @@ int runtime_romfs_handle(uint64_t h) {return h>0x100000000ULL&&h<0x100000000ULL+
 unsigned runtime_romfs_read_options(uint64_t *out,uint64_t h,int64_t off,void *buf,uint64_t size) {return runtime_romfs_read(out,h,off,buf,size);}
 void *runtime_fs_override(const char *name) {
  static const struct{const char *name;void *fn;} map[]={
- {"_ZN2nn2fs8MountRomEPKcPvm",mount_rom},{"_ZN2nn2fs22QueryMountRomCacheSizeEPm",cache_size}};
+ {"_ZN2nn2fs8MountRomEPKcPvm",mount_rom},{"_ZN2nn2fs22QueryMountRomCacheSizeEPm",cache_size},
+ {"_ZN2nn2fs8MountRomEPKc",mount_rom_nocache},{"_ZN2nn2fs8MountRomEPKciPvm",mount_rom_index},{"_ZN2nn2fs22QueryMountRomCacheSizeEPmi",cache_size_index}};
  for(size_t i=0;i<sizeof(map)/sizeof(map[0]);i++)if(!strcmp(name,map[i].name))return map[i].fn;return runtime_fs_host_override(name);
 }
 void runtime_fs_probe(void) {

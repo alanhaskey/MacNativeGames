@@ -76,13 +76,13 @@ def run_point(args, point):
     commands.write_text('')
     env = os.environ | {
         'TOTK_PROFILE_DIR': str(out/'profile'), 'TOTK_INPUT_FILE': str(commands),
-        'TOTK_SHADER_CACHE': str(ROOT/'build/shader-cache/rt-totk-native-v8-unverified'),
+        'TOTK_SHADER_CACHE': str(ROOT/'build/shader-cache/rt-totk-native-v9-unverified'),
         'TOTK_ROMFS_PROOF_DIR': str(args.output/'romfs-proof'),
         'TOTK_ASSUME_FOCUS': '1', 'TOTK_AUTOLOAD': '1', 'TOTK_FPS60': '1', 'TOTK_REALTIME': '1',
         'TOTK_MFX': '0', 'TOTK_MFX_UPSCALE': '0', 'TOTK_MFX_OUTPUT': '0', 'TOTK_OUTPUT_RES': 'auto',
         'TOTK_WINDOW_SIZE': '1280x720', 'TOTK_DRAWABLE_SCALE': '1',
         'TOTK_GPU_ALLOW_SUBMIT': '1', 'TOTK_GPU_WIDEN': '1', 'TOTK_GPU_BLOCKRT': '1',
-        'TOTK_GPU_MIDCLEAR': '1', 'TOTK_GPU_BUDGET_MB': '5000',
+        'TOTK_GPU_MIDCLEAR': '1',
         'DM_NVN_TSV': str(tsv), 'DM_NVN_TSV_CALLS': '0',
     }
     env.pop('TOTK_INPUT_SCRIPT', None)

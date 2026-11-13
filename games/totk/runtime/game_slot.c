@@ -16,21 +16,26 @@
      user-request       the user's game while it waits for the slot
      preempted/<token>  written just before a holder is stopped for the user
      history.log        one line per acquire / start / preempt / exit
-   The slot directory is TOTK_GAME_SLOT_DIR, else analysis/game-slot next to this binary's build/ directory; every
-   worktree links analysis/ to the main checkout (scripts/dev/new_worktree.sh), so all checkouts share one slot. */
+   The slot directory is TOTK_GAME_SLOT_DIR, else ~/Library/Application Support/MacNativeGames/TOTK/game-slot, the
+   folder the Tears of the Kingdom App's launcher passes (app/launcher.m), so a binary run directly, the scripts and the
+   App's game share one slot. Until 2026-11-11 the default was analysis/game-slot next to this binary's build/ directory. */
 #include <TargetConditionals.h>
 #if TARGET_OS_IPHONE
 #include "runtime.h"
-/* One app per phone: the slot only exists to keep several games off one Mac. */
+/* One app per phone: the slot only exists to keep several games off one Mac. No agent watch either: input.c's weak
+   runtime_slot_activity is used. */
 void runtime_game_slot_acquire(const char *mode) { (void)mode; }
 #else
 #include "runtime.h"
+#include "agent_slot_limit.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <libproc.h>
 #include <limits.h>
+#include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -109,11 +114,18 @@ static uint64_t pid_start(pid_t pid) {
     return bi.pbi_start_tvsec;
 }
 static int pid_same(pid_t pid, uint64_t start) { return start && pid_start(pid) == start; }
+/* Same rule as scripts/dev/game_slot.py is_game_path. */
+static int slot_path_is_game(const char *path) {
+    const char *b = strrchr(path, '/'); b = b ? b + 1 : path;
+    if (b - path >= 16 && !strncmp(b - 16, "/Contents/MacOS/", 16) &&
+        (!strcmp(b, "TOTK") || !strcmp(b, "BotW") || !strcmp(b, "Bananza") || !strcmp(b, "Pokopia") ||
+         !strcmp(b, "OcarinaOfTime"))) return 1;   /* the Mac apps' games (build_app.py APPS; games/oot/build.py) */
+    return !strncmp(b, "totk-native", 11) || !strncmp(b, "oot-native", 10);   /* also renamed copies such as totk-native.base */
+}
 static int pid_is_game(pid_t pid) {
     char path[PROC_PIDPATHINFO_MAXSIZE];
     if (proc_pidpath(pid, path, sizeof path) <= 0) return 0;
-    const char *b = strrchr(path, '/'); b = b ? b + 1 : path;
-    return !strncmp(b, "totk-native", 11);   /* also renamed copies such as totk-native.base */
+    return slot_path_is_game(path);
 }
 
 /* Live waiters in the queue (dead ones are removed). Returns how many; *head gets the oldest one's file name. */
@@ -203,23 +215,30 @@ static void preempt_holder(void) {
     }
 }
 
-static void slot_dir_init(void) {
-    char def[PATH_MAX] = "", exe[PROC_PIDPATHINFO_MAXSIZE];
-    const char *env = getenv("TOTK_GAME_SLOT_DIR");
-    /* Packaged launchers always supply an external slot. Do not create even
-       an empty analysis directory inside a sealed or read-only app bundle. */
-    if ((!env || !*env) && proc_pidpath(getpid(), exe, sizeof exe) > 0) {   /* <native-port>/build/totk-native -> <native-port>/analysis */
-        char *s = strrchr(exe, '/'); if (s) *s = 0;
-        s = strrchr(exe, '/'); if (s) *s = 0;
-        char analysis[PATH_MAX], real[PATH_MAX];
-        snprintf(analysis, sizeof analysis, "%s/analysis", exe);
-        if (mkdir(analysis, 0755) && errno != EEXIST) slot_fail("cannot create", analysis);
-        if (!realpath(analysis, real)) slot_fail("cannot resolve", analysis);
-        snprintf(def, sizeof def, "%s/game-slot", real);
+/* The folder app/launcher.m passes to its game (and scripts/dev/game_slot.py default_slot_dir); 0 without HOME. */
+static int slot_default_dir(char *out, size_t n) {
+    const char *home = getenv("HOME");
+    if (!home || !*home) return 0;
+    return snprintf(out, n, "%s/Library/Application Support/MacNativeGames/TOTK/game-slot", home) < (int)n;
+}
+static void mkdir_parents(const char *path) {   /* mkdir -p: MacNativeGames/TOTK may not exist yet */
+    char p[PATH_MAX]; snprintf(p, sizeof p, "%s", path);
+    for (char *s = p + 1; *s; s++) {
+        if (*s != '/') continue;
+        *s = 0;
+        if (mkdir(p, 0755) && errno != EEXIST) slot_fail("cannot create", p);
+        *s = '/';
     }
+    if (mkdir(p, 0755) && errno != EEXIST) slot_fail("cannot create", p);
+}
+
+static void slot_dir_init(void) {
+    char def[PATH_MAX] = "";
+    const char *env = getenv("TOTK_GAME_SLOT_DIR");
+    if ((!env || !*env) && !slot_default_dir(def, sizeof def)) def[0] = 0;
     const char *want = env && *env ? env : def;
     if (!*want) runtime_fail("game slot: no slot directory (set TOTK_GAME_SLOT_DIR)");
-    if (mkdir(want, 0755) && errno != EEXIST) slot_fail("cannot create", want);
+    mkdir_parents(want);
     if (!realpath(want, slot_dir)) slot_fail("cannot resolve", want);
     char sub[PATH_MAX];
     path_in(sub, "queue"); if (mkdir(sub, 0755) && errno != EEXIST) slot_fail("cannot create", sub);
@@ -230,7 +249,9 @@ static void slot_dir_init(void) {
 static int test_ignores_legacy(void) {   /* tests use their own slot directory; never the shared one */
     const char *e = getenv("TOTK_GAME_SLOT_TEST_IGNORE_LEGACY"), *d = getenv("TOTK_GAME_SLOT_DIR");
     if (!e || strcmp(e, "1")) return 0;
-    if (!d || !*d || strstr(slot_dir, "/analysis/game-slot")) runtime_fail("TOTK_GAME_SLOT_TEST_IGNORE_LEGACY needs a test TOTK_GAME_SLOT_DIR");
+    char shared[PATH_MAX], real[PATH_MAX];
+    int is_shared = slot_default_dir(shared, sizeof shared) && !strcmp(slot_dir, realpath(shared, real) ? real : shared);
+    if (!d || !*d || is_shared) runtime_fail("TOTK_GAME_SLOT_TEST_IGNORE_LEGACY needs a test TOTK_GAME_SLOT_DIR");
     return 1;
 }
 
@@ -263,6 +284,89 @@ static void dry_run(void) {   /* tests: hold the slot like a game would, without
     exit(0);
 }
 
+/* An agent's game closes itself when nobody uses it (agent_slot_limit.h). input.c reports each input-file command and
+   each real user input (runtime_slot_activity); a thread checks twice a second and asks for the close the input file's
+   "close" makes (frontend.m: the window closes and waits for a save in progress). */
+uint64_t dm_nvn_frame_count(void);           /* gfx/nvn/hle_nvn.c: game frames presented; nvn_mtl.m warm_start holds the
+                                                first one until the warm-up before the title is done */
+void runtime_front_request_close(void);      /* frontend.m: what the input file's "close" does */
+enum { AGENT_CLOSE_STOP_S = 120 };           /* still running this long after the close request: SIGTERM, as a user's
+                                                game stops an agent's game (preempt_holder) */
+static _Atomic uint64_t agent_command_ns, agent_user_ns;   /* CLOCK_MONOTONIC ns of the last one; 0 none */
+static uint64_t agent_clock_ns(void) { return clock_gettime_nsec_np(CLOCK_MONOTONIC); }
+static double agent_clock_s(uint64_t ns) { return ns ? (double)ns / 1e9 : AGENT_NEVER; }
+
+void runtime_slot_activity(int user) { atomic_store(user ? &agent_user_ns : &agent_command_ns, agent_clock_ns()); }
+
+static AgentLimitConfig agent_config;
+static double agent_start;
+
+static void agent_close(AgentLimit why, double now, double shown, double last) {
+    char line[200], extra[200];
+    if (why == AGENT_LIMIT_IDLE) {
+        long idle = (long)(now - (last > shown ? last : shown));
+        snprintf(line, sizeof line, "no command or input for %ld s", idle);
+        snprintf(extra, sizeof extra, "reason=idle idle_s=%ld", idle);
+    } else {
+        snprintf(line, sizeof line, "over its expected %ld s (+%ld s grace; running %ld s)", agent_config.expect_s,
+                 agent_config.grace_s, (long)(now - agent_start));
+        snprintf(extra, sizeof extra, "reason=limit expect_s=%ld running_s=%ld", agent_config.expect_s, (long)(now - agent_start));
+    }
+    fprintf(stderr, "[slot] agent game %s closed: %s\n", owner, line);
+    history("agent-close", extra);
+    runtime_front_request_close();
+}
+
+static void *agent_watch(void *arg) {
+    (void)arg;
+    double shown = AGENT_NEVER, closed_at = AGENT_NEVER;
+    for (;;) {
+        usleep(500000);
+        double now = agent_clock_s(agent_clock_ns());
+        if (closed_at >= 0) {
+            if (now - closed_at < AGENT_CLOSE_STOP_S) continue;
+            fprintf(stderr, "[slot] agent game %s still running %d s after its close request: stopping it (SIGTERM)\n", owner, AGENT_CLOSE_STOP_S);
+            history("agent-stop", "reason=close-request-ignored");
+            kill(getpid(), SIGTERM);
+            closed_at = now;   /* once more after another AGENT_CLOSE_STOP_S if it is still there */
+            continue;
+        }
+        if (shown < 0 && dm_nvn_frame_count()) shown = now;
+        double cmd = agent_clock_s(atomic_load(&agent_command_ns)), user = agent_clock_s(atomic_load(&agent_user_ns));
+        double last = cmd > user ? cmd : user;
+        AgentLimit why = agent_limit_decide(now, agent_start, shown, last, user, (double)agent_config.idle_s, (double)agent_config.limit_s);
+        if (why == AGENT_LIMIT_NONE) continue;
+        agent_close(why, now, shown, last);
+        closed_at = now;
+    }
+    return NULL;
+}
+
+/* Called once the slot is ours. The user's game (owner user, or no TOTK_SLOT_OWNER) is never watched. */
+static void agent_watch_start(void) {
+    const char *o = getenv("TOTK_SLOT_OWNER");
+    if (!agent_owner_is_agent(o)) return;
+    agent_config = agent_limit_config(getenv("TOTK_AGENT_IDLE_S"), getenv("TOTK_AGENT_GRACE_S"), getenv("TOTK_AGENT_LIMIT_S"),
+                                      getenv("TOTK_SLOT_EXPECT_S"));
+    if (agent_config.bad)
+        fprintf(stderr, "[slot] %s=%s is not whole seconds (0 to %d): its default is used\n", agent_config.bad,
+                getenv(agent_config.bad), AGENT_SECONDS_MAX);
+    if (!agent_config.idle_s)
+        fprintf(stderr, "[slot] warning: TOTK_AGENT_IDLE_S=0: agent game %s does not close when idle; close it yourself\n", owner);
+    if (!agent_config.limit_s)
+        fprintf(stderr, "[slot] warning: TOTK_AGENT_LIMIT_S=0: agent game %s has no time limit; close it yourself\n", owner);
+    agent_start = agent_clock_s(agent_clock_ns());
+    char idle[48] = "never when idle", limit[48] = "no time limit";
+    if (agent_config.idle_s) snprintf(idle, sizeof idle, "%ld s idle", agent_config.idle_s);
+    if (agent_config.limit_s) snprintf(limit, sizeof limit, "%ld s", agent_config.limit_s);
+    fprintf(stderr, "[slot] agent game %s: closes itself after %s or %s (TOTK_AGENT_IDLE_S, TOTK_SLOT_EXPECT_S + TOTK_AGENT_GRACE_S)\n",
+            owner, idle, limit);
+    if (!agent_config.idle_s && !agent_config.limit_s) return;
+    pthread_t t;
+    if (pthread_create(&t, NULL, agent_watch, NULL)) runtime_fail("game slot: cannot start the agent game watch");
+    pthread_detach(t);
+}
+
 void runtime_game_slot_acquire(const char *mode) {
     clean_copy(mode_name, sizeof mode_name, mode);
     const char *o = getenv("TOTK_SLOT_OWNER"), *pu = getenv("TOTK_SLOT_PURPOSE");
@@ -289,6 +393,7 @@ void runtime_game_slot_acquire(const char *mode) {
         holder_write();
         history("start", "slot=inherited");
         fprintf(stderr, "[game-slot] 游戏位置由启动脚本持有（%s，%s）\n", owner, purpose);
+        agent_watch_start();
         dry_run();
         return;
     }
@@ -350,6 +455,7 @@ void runtime_game_slot_acquire(const char *mode) {
     char extra[64]; snprintf(extra, sizeof extra, "waited_s=%lld", (long long)(acquired_at - start));
     history("acquire", extra);
     fprintf(stderr, "[game-slot] 取得游戏位置（%s，%s）%s\n", owner, purpose, acquired_at > start ? "，等待结束" : "");
+    agent_watch_start();
     dry_run();
 }
 #endif   /* !TARGET_OS_IPHONE */

@@ -8,6 +8,11 @@
 #   make boot      # run it from the work folder (cwd: extracted/ and rewritten/ are read relative to it)
 # VERSION picks the game version (v100 or v221); by default the newest one extracted in the work folder.
 
+# opus and libvpx come from the repository's tools/deps: made once per Mac from pinned sources (no Homebrew).
+# make runs here (games/<game>); set a *_PREFIX to use another build.
+OPUS_PREFIX ?= $(or $(shell python3 ../../tools/deps prefix opus),$(error tools/deps could not make opus))
+VPX_PREFIX ?= $(or $(shell python3 ../../tools/deps prefix libvpx),$(error tools/deps could not make libvpx))
+
 WORK ?= XC3_build
 OUT := $(WORK)/build
 VERSIONS := v100 v221
@@ -43,8 +48,8 @@ $(OUT)/obj/%.o: % $(GFX_HEADERS) Makefile
 
 $(OUT)/xc3-native-$(VERSION): $(RUNTIME_SRC) $(RUNTIME_HEADERS) $(GENERATED) $(GFX_OBJECTS) Makefile
 	xcrun clang -std=c11 $(NATIVE_OPT) -g -Wall -Wextra -Werror -Wno-deprecated-declarations $(VERSION_DEFINE) \
-	  -Ithird_party/d2r_gfx/gfx/nvn/include -I$(VOUT) -I/opt/homebrew/opt/opus/include/opus -I/opt/homebrew/opt/libvpx/include \
-	  $(RUNTIME_SRC) $(GFX_OBJECTS) /opt/homebrew/opt/opus/lib/libopus.a /opt/homebrew/opt/libvpx/lib/libvpx.a \
+	  -Ithird_party/d2r_gfx/gfx/nvn/include -I$(VOUT) -I$(OPUS_PREFIX)/include/opus -I$(VPX_PREFIX)/include \
+	  $(RUNTIME_SRC) $(GFX_OBJECTS) $(OPUS_PREFIX)/lib/libopus.a $(VPX_PREFIX)/lib/libvpx.a \
 	  -framework Metal -framework MetalFX -framework Foundation -framework QuartzCore -framework ImageIO -framework CoreGraphics \
 	  -framework CoreText -framework UniformTypeIdentifiers -fobjc-arc -framework Cocoa -framework CoreVideo -framework CoreFoundation \
 	  -framework AudioToolbox -framework GameController -framework CoreHaptics -framework IOKit -o "$@"
@@ -88,14 +93,20 @@ boot: runtime
 # (sizes and SHA-256 of the replacements and the originals).
 DATA ?= $(HOME)/Library/Application Support/MacNativeGames/XC3
 .PHONY: patches mods app
-# The app's startup shaders (scripts/prepare_shader_seed.py): the variants met in play on this Mac, from the work folder's
-# translation cache and the app's own (SEED_CACHE, SEED_APP_CACHE), so a fresh app does not translate them while playing. Game-derived:
-# it stays in the work folder and the local app.
+# The app's startup shaders (scripts/prepare_shader_seed.py): every shader of the game's own files translated ahead of play
+# (make shader-prepare, scripts/translate_shaders.py: the RomFS, the add-ons in $(WORK)/extracted/aoc, main) and the variants
+# met in play on this Mac, from the work folder's translation cache and the app's own (SEED_CACHE, SEED_APP_CACHE), so a fresh
+# app does not translate them while playing. Game-derived: it stays in the work folder and the local app.
 SEED_CACHE ?= $(WORK)/build/shader-cache/rt-totk-native-v4-unverified
 SEED_APP_CACHE ?= $(DATA)/shader-cache
-.PHONY: shader-seed
+SEED_PREPARED ?= $(OUT)/shader-prepared
+.PHONY: shader-prepare shader-seed
+shader-prepare: shader-tools
+	"$(PY)" scripts/translate_shaders.py --out "$(SEED_PREPARED)" --translator "$(OUT)/shader-service/totk_xlate" \
+	  --spirv-cross "$(OUT)/spirv-cross/spirv-cross" --main "$(WORK)/rewritten/$(VERSION)/main.patched.bin" \
+	  "$(WORK)/extracted/$(VERSION)" $(wildcard $(WORK)/extracted/aoc/*)
 shader-seed:
-	"$(PY)" scripts/prepare_shader_seed.py --out "$(OUT)/shader-seed" "$(SEED_CACHE)" "$(SEED_APP_CACHE)"
+	"$(PY)" scripts/prepare_shader_seed.py --out "$(OUT)/shader-seed" "$(SEED_PREPARED)" "$(SEED_CACHE)" "$(SEED_APP_CACHE)"
 patches:
 	"$(PY)" scripts/prepare_patches.py --work "$(WORK)" --version $(VERSION)
 mods:

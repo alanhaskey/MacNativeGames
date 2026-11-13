@@ -20,6 +20,12 @@ from pathlib import Path
 ENTITLEMENT = 'com.apple.developer.kernel.increased-memory-limit'
 CACHE = Path.home()/'Library/Caches/MacNativeGames/ios-signing'
 
+def xcodegen():
+    """The pinned XcodeGen of the repository's tools/deps (downloaded once per Mac; no Homebrew)."""
+    sys.path.insert(0, os.environ.get('MNG_REPO') or str(Path(__file__).resolve().parents[4]))
+    from tools.deps import program
+    return program('xcodegen')
+
 def run(cmd, **kw): return subprocess.run([str(x) for x in cmd], check=True, **kw)
 def out(cmd): return subprocess.run([str(x) for x in cmd], check=True, capture_output=True, text=True).stdout
 
@@ -67,13 +73,13 @@ targets:
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_ENTITLEMENTS: TOTK.entitlements
 ''')
-    run(['xcodegen','generate','--quiet'], cwd=proj)
+    run([xcodegen(),'generate','--quiet'], cwd=proj)
     derived = proj/'derived'
     log = proj/'xcodebuild.log'
     with log.open('w') as f:
         r = subprocess.run(['xcodebuild','-project','TOTKSigning.xcodeproj','-scheme','TOTK','-configuration','Debug',
-                            '-destination',f'id={udid}','-derivedDataPath',str(derived),
-                            '-allowProvisioningUpdates','-allowProvisioningDeviceRegistration','build'],
+                            '-destination',f'generic/platform={project_platform}','-derivedDataPath',str(derived),
+                            '-allowProvisioningUpdates','build'],
                            cwd=proj, stdout=f, stderr=subprocess.STDOUT)
     if r.returncode:
         errors = [l for l in log.read_text(errors='replace').splitlines() if 'error:' in l]
@@ -313,6 +319,8 @@ def main():
         sys.exit('this is a native Vision Pro app: choose a paired Vision Pro with --device')
     prov, signed = profile(team, bundle_id, udid, platform)
     info = plistlib.loads(out(['security','cms','-D','-i',prov]).encode())
+    if udid not in info.get('ProvisionedDevices', []) and not info.get('ProvisionsAllDevices'):
+        sys.exit('this device is not registered in the provisioning profile; register it with your Apple developer team first')
     ents = info['Entitlements']
     if not ents.get(ENTITLEMENT):
         print(f'warning: your team cannot grant {ENTITLEMENT}; iOS may close the game when it runs out of memory')

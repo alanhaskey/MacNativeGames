@@ -1,5 +1,8 @@
-// The launcher inside the packaged app (build_app.py compiles it as Contents/MacOS/TOTK).
-// The game itself is Contents/Resources/totk/build/totk-native; everything it writes goes to the player's own folders:
+// The launcher inside the packaged app. It is part of the game binary, which build_app.py places as Contents/MacOS/TOTK
+// (and, for tools, as Contents/Resources/totk/build/totk-native): started from Contents/MacOS, runtime/loader.c main runs
+// runtime_app_launch first and then boots the game in the same process. One process on purpose: an app that execs another
+// binary after it started is left out of the Cmd+Tab switcher (macOS 27; the Dock still shows it).
+// Everything the game writes goes to the player's own folders:
 //   ~/Library/Application Support/MacNativeGames/TOTK/   profile (account, saves), shader cache, game slot, RomFS proof (BotW/ for Breath of the Wild)
 //   ~/Library/Logs/MacNativeGames/totk.log             this run, only with the debug log on (totk.previous.log: the one before; botw.log for Breath of the Wild)
 // If the game is already running, the launcher only brings it to the front.
@@ -18,13 +21,14 @@
 #include <sys/proc.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include "dmsh_chain.h"   // DMSH_CHAIN: the shader translation chain the cache folder is named after
-#include "game_version.h"
-#include "controller_map.h"
-#include "include/totk_ui_lang.h"
-#include "totk_shader_contrib.h"   // the shared shader list contribution and its reminder
-#include "contrib_submit.h"        // its "Submit automatically" (gh), shared with the settings panel
-#include "auto_update.h"           // the settings panel's Update page: --update-check, --update-install
+#include "../third_party/d2r_gfx/gfx/nvn/dmsh_chain.h"
+#include "../runtime/game_version.h"
+#include "../runtime/controller_map.h"
+#include "../runtime/runtime.h"
+#include "../third_party/d2r_gfx/gfx/nvn/include/totk_ui_lang.h"
+#include "../third_party/d2r_gfx/gfx/nvn/totk_shader_contrib.h"
+#include "../third_party/d2r_gfx/gfx/nvn/totk_contrib_upload.h"
+#include "auto_update.h"
 
 static void show_error(NSString *detail) {
     NSAlert *alert = [NSAlert new];
@@ -96,41 +100,44 @@ static void note(NSString *text) {
     [alert runModal];
 }
 
-/* Every TOTK_CONTRIB_STEP shaders and render pipelines the shared list does not have yet (totk_shader_contrib.h), before the game starts: ask
-   the player to send the file in a GitHub issue. "Send" opens the issue form and shows the file in Finder to drag in.
-   With gh signed in, "Submit automatically" takes the place of "Remind me next time" and sends this file at once.
-   The star button only opens the project page (the player stars it there) and asks again next time. */
-static void contrib_reminder(NSString *path) {
-    NSUInteger rows = totk_contrib_due(path);
-    if (!rows) return;
-    totk_contrib_reminded(path, rows);   // "next time": TOTK_CONTRIB_STEP rows later; "don't remind me again": never
-    NSString *gh = gh_path();
+/* Saves sync (runtime/cloud_save.m): a start with no sync folder offers to choose one, before the game reads its save, so
+   it syncs from this start. "Not now" asks again at the next start; "Don't ask again" (or Stop Syncing in the app menu,
+   runtime/frontend.m) never. Returns the folder chosen now, or nil. */
+static NSString *cloud_folder_offer(NSUserDefaults *sync) {
+    if ([sync boolForKey:@"TOTK_CLOUD_SAVE_ASKED"]) return nil;
     [NSApplication sharedApplication]; [NSApp activateIgnoringOtherApps:YES];
-    [NSWorkspace.sharedWorkspace activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:path]]];   // the folder, before the question
     NSAlert *alert = [NSAlert new];
-    alert.messageText = @(TOTK_UI("期待你的贡献", "We would love your contribution"));
-    alert.informativeText = [NSString stringWithFormat:@"%@%@", [NSString stringWithFormat:@(TOTK_UI("你有 %lu 条着色器和渲染管线可以贡献：玩的时候遇到的、公共着色器清单里还没有的。它们记在一个小文件里，只有着色器和管线的标识，不含游戏内容、存档或个人信息。把它发到 GitHub 加进公共清单，以后大家打包的 App 都会带上它们，玩到那里不再卡顿。\n\n",
-                                      "You have %lu shaders and render pipelines to contribute: ones your game met that the shared shader list does not have yet. They are kept in a small file with shader and pipeline identifiers only: no game data, saves or personal information. Sent to GitHub and added to the shared list, they come with everyone's next build, and nobody stutters there again.\n\n")), (unsigned long)rows],
-                             gh ? @(TOTK_UI("点“自动提交”会用这台 Mac 上登录的 GitHub 命令行（gh）直接提交，不用打开网页。点“发送”会打开 GitHub 的提交页面，并在访达里显示这个文件，把它拖进页面即可。",
-                                            "\"Submit automatically\" sends it now with the GitHub CLI (gh) signed in on this Mac, without the browser. \"Send\" opens the GitHub form and shows the file in Finder: drag it into the form."))
-                                : @(TOTK_UI("点“发送”会打开 GitHub 的提交页面，并在访达里显示这个文件，把它拖进页面即可。",
-                                            "\"Send\" opens the GitHub form and shows the file in Finder: drag it into the form."))];
-    [alert addButtonWithTitle:@(TOTK_UI("发送", "Send"))];
-    [alert addButtonWithTitle:gh ? @(TOTK_UI("自动提交", "Submit automatically")) : @(TOTK_UI("下次提醒", "Remind me next time"))];
-    [alert addButtonWithTitle:@(TOTK_UI("不要提醒了", "Don't remind me again"))];
-    [alert addButtonWithTitle:@(TOTK_UI("⭐ 喜欢就点个 Star", "⭐ Like it? Star it on GitHub"))];
+    alert.messageText = @(TOTK_UI("要和其他设备同步存档吗？", "Sync saves with your other devices?"));
+    alert.informativeText = @(TOTK_UI("选择一个每台设备都能看到的文件夹，例如 iCloud 云盘里的文件夹（也可以是和另一个 Apple ID 共享的文件夹）。存档仍保存在这台 Mac 上，只把副本放进这个文件夹，其他设备在那里接续。以后也可以在应用菜单 › 存档同步里更改。",
+                                      "Choose a folder every device can see, such as a folder in iCloud Drive (one shared with another Apple ID works too). Saves stay on this Mac; a copy goes to the folder, and your other devices carry on from there. You can change it later in the app menu › Save Sync."));
+    [alert addButtonWithTitle:@(TOTK_UI("选择文件夹…", "Choose Folder…"))];
+    [alert addButtonWithTitle:@(TOTK_UI("以后再说", "Not Now"))];
+    [alert addButtonWithTitle:@(TOTK_UI("不要再问", "Don't Ask Again"))];
     NSModalResponse choice = [alert runModal];
-    if (choice == NSAlertThirdButtonReturn + 1) [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@TOTK_REPO_URL]];
-    if (choice == NSAlertThirdButtonReturn) totk_contrib_never(path);
-    if (choice == NSAlertSecondButtonReturn && gh) {
-        NSString *issue = contrib_submit(gh, path, rows);
-        if (issue) { note([NSString stringWithFormat:@"%@\n%@", @(TOTK_UI("感谢你的 shader 贡献，让我们一起让游戏更流畅！", "Thank you for your shader contribution! Let's make the game smoother together!")), issue]); return; }
-        note(@(TOTK_UI("自动提交没有成功，改为打开提交页面。", "Submitting automatically did not work; opening the form instead.")));
-        choice = NSAlertFirstButtonReturn;
-    }
-    if (choice != NSAlertFirstButtonReturn) return;
-    [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@TOTK_CONTRIB_ISSUE_URL]];
-    [NSWorkspace.sharedWorkspace activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:path]]];
+    if (choice == NSAlertThirdButtonReturn) [sync setBool:YES forKey:@"TOTK_CLOUD_SAVE_ASKED"];
+    if (choice != NSAlertFirstButtonReturn) return nil;
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.canChooseFiles = NO; panel.canChooseDirectories = YES; panel.canCreateDirectories = YES; panel.allowsMultipleSelection = NO;
+    panel.message = @(TOTK_UI("选择每台设备都能看到的文件夹（例如 iCloud 云盘里共享的文件夹）。", "Choose a folder every device can see (e.g. a shared folder in iCloud Drive)."));
+    panel.prompt = @(TOTK_UI("选择", "Choose"));
+    panel.directoryURL = [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Mobile Documents/com~apple~CloudDocs"] isDirectory:YES];
+    if ([panel runModal] != NSModalResponseOK || !panel.URL) return nil;   // cancelled: asked again at the next start
+    [sync setObject:panel.URL.path forKey:@"TOTK_CLOUD_SAVE_FOLDER"];
+    return panel.URL.path;
+}
+
+/* The one question about the shader contribution (totk_contrib_upload.h, the same on iPhone / iPad), before the game
+   starts, at the first start where the player has not chosen yet (no row threshold, user 2026-11-10). */
+static void contrib_ask(NSString *path) {
+    NSUInteger rows = totk_inbox_should_ask(path);
+    if (!rows) return;
+    [NSApplication sharedApplication]; [NSApp activateIgnoringOtherApps:YES];
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = totk_inbox_prompt_title();
+    alert.informativeText = totk_inbox_prompt_text();
+    for (NSString *answer in totk_inbox_prompt_answers()) [alert addButtonWithTitle:answer];
+    NSModalResponse choice = [alert runModal];
+    totk_inbox_answer(path, choice == NSAlertFirstButtonReturn ? TOTK_INBOX_AUTO : TOTK_INBOX_NEVER);
 }
 
 /* The contribution file: in the project folder the app was built from, <clone>/shader-list-contribution/shader-list-contribution.txt
@@ -143,9 +150,14 @@ static NSString *contrib_file(NSString *data) {
     NSString *folder = [NSBundle.mainBundle objectForInfoDictionaryKey:@"MNGContributionFolder"];
     if (![folder isKindOfClass:NSString.class] || !folder.length || ![fm fileExistsAtPath:folder.stringByDeletingLastPathComponent]) return old;
     if (![fm createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil]) return old;
-    // one file for the Mac and every iPhone / iPad (ios/tools/shader_contrib_watch.py merges theirs in): the rows are the same
-    // for every platform; Breath of the Wild has a list of its own
-    NSString *mine = [folder stringByAppendingPathComponent:strcmp(GAME_FOLDER, "TOTK") ? @"shader-list-contribution-botw.txt" : @"shader-list-contribution.txt"];
+    // the Mac's file (an iPhone / iPad contributes its own, totk_contrib_upload.h). Each game its own file: Tears of the
+    // Kingdom's without a suffix, Breath of the Wild's -botw, Bananza's and Pokopia's -<TOTK_GAME_DIR>, as Ocarina of Time's
+    // launcher. Until 2026-11-12 every game but Tears of the Kingdom wrote -botw's, so one file held Breath of the Wild's and
+    // Pokopia's rows and whichever app sent it named its own game for both (the inbox: 464 Pokopia rows sent as Breath of
+    // the Wild 1.6.0's).
+    NSString *mine = [folder stringByAppendingPathComponent:!strcmp(GAME_FOLDER, "TOTK") ? @"shader-list-contribution.txt"
+                      : !strcmp(GAME_FOLDER, "BotW") ? @"shader-list-contribution-botw.txt"
+                      : [NSString stringWithFormat:@"shader-list-contribution-%s.txt", TOTK_GAME_DIR]];
     if (![fm fileExistsAtPath:mine] && [fm fileExistsAtPath:old]) {
         [fm moveItemAtPath:old toPath:mine error:nil];
         NSString *state = [old stringByAppendingString:@".reminded"];   // where the state was kept before (totk_contrib_state)
@@ -293,23 +305,24 @@ static int update_install_run(pid_t game) {
     return 0;
 }
 
-int main(int argc, char **argv) {
+/* Returns -1 with *boot set to the arguments the game boots with (rewritten folder, "boot"), or the status to exit with. */
+int runtime_app_launch(int argc, char **argv, char ***boot) {
     @autoreleasepool {
         if (argc > 1 && !strcmp(argv[1], "--update-check")) return update_check_run();   // the Update page (auto_update.h)
         if (argc > 2 && !strcmp(argv[1], "--update-install")) return update_install_run((pid_t)atoi(argv[2]));
         NSString *root = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"totk"];
-        NSString *binary = [root stringByAppendingPathComponent:@"build/totk-native"];
+        NSString *binary = [root stringByAppendingPathComponent:@"rewritten/" TOTK_GAME_DIR "/main.patched.bin"];   // the game's code
         /* --check (build_app.py, once after packaging): only look that the game is there and exit. The first run of a new
            app is when macOS scans the whole bundle (minutes for 16 GB, with nothing on screen); doing it during the build
            makes the player's first start immediate. */
         if (argc > 1 && !strcmp(argv[1], "--check")) {
-            int ok = access(binary.fileSystemRepresentation, X_OK) == 0;
+            int ok = access(binary.fileSystemRepresentation, R_OK) == 0;
             NSString *declared = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
             ok = ok && [declared isEqualToString:@TOTK_GAME_VERSION];
-            printf("%s: game version %s\n", ok ? "ok" : "missing binary or version mismatch", TOTK_GAME_VERSION);
+            printf("%s: game version %s\n", ok ? "ok" : "missing game files or version mismatch", TOTK_GAME_VERSION);
             return ok ? 0 : 1;
         }
-        if (access(binary.fileSystemRepresentation, X_OK) != 0) {
+        if (access(binary.fileSystemRepresentation, R_OK) != 0) {
             show_error(@"The game files are missing from this app. Build it again with build_app.py.");
             return 1;
         }
@@ -394,6 +407,15 @@ int main(int argc, char **argv) {
             setenv("TOTK_ROMFS_DATA", library.fileSystemRepresentation, 1);   // runtime/romfs.c
         }
         setenv("TOTK_SHARED_FONTS", "extracted/firmware/shared-fonts", 1);
+        /* The folder the game binary's own files are in (shader-service, shader-seed, shader-libs, pso lists: totk_shader_rt.m
+           root_dir, nvn_mtl.m exe_rel), which is no longer the folder of the running executable (Contents/MacOS). */
+        setenv("TOTK_NATIVE_DIR", [root stringByAppendingPathComponent:@"build"].fileSystemRepresentation, 1);
+        /* Save sync (runtime/cloud_save.m): the folder the player chose in the app menu (runtime/frontend.m) or in
+           cloud_folder_offer, which asks at a start that has none. TOTK_CLOUD_SAVE_DIR wins over it; 0 = off. */
+        NSUserDefaults *sync = [[NSUserDefaults alloc] initWithSuiteName:@RUNTIME_SAVE_SYNC_DEFAULTS];
+        NSString *chosen = [sync stringForKey:@"TOTK_CLOUD_SAVE_FOLDER"];
+        if (!getenv("TOTK_CLOUD_SAVE_DIR") && !getenv("TOTK_CLOUD_SAVE_FOLDER") && !chosen.length) chosen = cloud_folder_offer(sync);
+        if (!getenv("TOTK_CLOUD_SAVE_DIR") && chosen.length) setenv("TOTK_CLOUD_SAVE_FOLDER", chosen.fileSystemRepresentation, 0);
         /* Player mods (runtime/romfs.c): <data>/mods/<version>/manifest.tsv, when present. With no controller connected at
            start, <data>/mods/<version>-keyboard takes its place when it holds a manifest (keyboard key icons in the prompts:
            scripts/make_button_icons.py --style keyboard or azerty). The fonts are read once, so it holds for the session. */
@@ -416,12 +438,15 @@ int main(int argc, char **argv) {
         /* The commit the app was built from (build_app.py MNGSourceCommit): the HUD box shows it (runtime/frontend.m). */
         NSString *commit = [NSBundle.mainBundle objectForInfoDictionaryKey:@"MNGSourceCommit"];
         if ([commit isKindOfClass:NSString.class] && commit.length) setenv("TOTK_SOURCE_COMMIT", commit.UTF8String, 1);
-        NSString *contrib = env_or("TOTK_SHADER_CONTRIB", contrib_file(data));
+        NSString *contrib = totk_inbox_claim(env_or("TOTK_SHADER_CONTRIB", contrib_file(data)));   // this game's file only
         setenv("TOTK_SHADER_CONTRIB", contrib.fileSystemRepresentation, 1);
         { const char *seed = getenv("TOTK_SHADER_SEED_DIR");   // what this app serves leaves the file before the reminder counts it
           NSString *build = [root stringByAppendingPathComponent:@"build"];
           totk_contrib_prune(contrib, seed ? @(seed) : [build stringByAppendingPathComponent:@"shader-seed"], build); }
-        contrib_reminder(contrib);
+        contrib_ask(contrib);
+        setenv("TOTK_BOARD_DIR", data.fileSystemRepresentation, 0);   // the leaderboard's folder (runtime/board_upload.h); a test run keeps its own;
+        //   named first: the uploads below send the board's id with the rows (totk_inbox_board_id)
+        totk_inbox_start(contrib, @"mac");   // the player chose "Contribute shaders": sent while playing
         unsetenv("TOTK_AUTOLOAD");   // the game starts at its title screen, as on the console
         /* runtime command channel (runtime/input.c): echo "shot ~/Desktop/shot.png" >> "<data>/input.txt" */
         { NSString *cmds = env_or("TOTK_INPUT_FILE", [data stringByAppendingPathComponent:@"input.txt"]);
@@ -462,12 +487,10 @@ int main(int argc, char **argv) {
             dup2(fileno(lf), STDERR_FILENO);
             fclose(lf);
         }
-        setenv("TOTK_UPDATE_LAUNCHER", NSBundle.mainBundle.executablePath.fileSystemRepresentation, 1);   // the Update page starts it
-        char *const arguments[] = {(char *)binary.fileSystemRepresentation, "rewritten/" TOTK_GAME_DIR, "boot", NULL};
-        execv(arguments[0], arguments);
-        int failed = errno;
-        fprintf(stderr, "[launcher] execv failed: %s\n", strerror(failed));
-        show_error([NSString stringWithFormat:@"Starting the game failed: %s.", strerror(failed)]);
-        return 1;
+        setenv("TOTK_UPDATE_LAUNCHER", NSBundle.mainBundle.executablePath.fileSystemRepresentation, 1);
+        static char *arguments[4] = {NULL, "rewritten/" TOTK_GAME_DIR, "boot", NULL};
+        arguments[0] = argv[0];
+        *boot = arguments;
+        return -1;
     }
 }

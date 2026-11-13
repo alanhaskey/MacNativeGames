@@ -12,6 +12,8 @@ import subprocess
 import sys
 
 GAME = Path(__file__).resolve().parents[1]
+REPO = Path(os.environ.get('MNG_REPO') or GAME.parents[1])   # the MacNativeGames checkout (games/aoc/scripts/build_aoc.py → parents[3]; MNG_REPO when a process that imported tools/deps started this one): its tools/deps makes the build tools
+BUILD_TOOLS = ('zstd', 'spirv-cross', 'dotnet')   # what the build runs from PATH; xcodegen and glslangValidator only an iPhone build or an OpenGL game need
 TITLE = '01002B00111A2000'
 APP_NAME = 'Hyrule Warriors: Age of Calamity'
 PROFILE_NAME = 'Hyrule Warriors Age of Calamity'
@@ -76,10 +78,12 @@ def stage(work):
     return source
 
 
-def verify_originals(build):
-    pins = json.loads((GAME / 'assets/expected-1.3.0.json').read_text())
+def verify_originals(build, version=None):
+    from inspect_inputs import VERSIONS, pins_of
+    version = version or VERSIONS['1.3.0']
+    pins = json.loads(pins_of(version).read_text())
     for name, pin in pins['modules'].items():
-        data = (build / 'extract/v327680/ExeFS' / name).read_bytes()
+        data = (build / 'extract' / version['tag'] / 'ExeFS' / name).read_bytes()
         if len(data) != pin['size'] or hashlib.sha256(data).hexdigest() != pin['sha256']:
             raise ValueError(f'original ExeFS hash mismatch: {name}')
     return pins
@@ -98,16 +102,18 @@ def package_notices(resources):
         shutil.copy2(path, destination)
 
 
-def package(source, build, output, language):
+def package(source, build, output, language, version=None, dlc=None):
     """Package only after the source build succeeds. Never rewrite a patched binary."""
     if output.suffix != '.app':
         raise ValueError('--output must end in .app')
     if output.exists():
         raise ValueError(f'output exists; choose a new path or move it aside: {output}')
-    pins = verify_originals(build)
-    from inspect_inputs import inspect
-    inspect(build / 'extract/v327680', GAME / 'assets/expected-1.3.0.json')
-    rewrite = verify_rewrite(source, build / 'patched_v327680', pins)
+    from inspect_inputs import VERSIONS, inspect, pins_of
+    version = version or VERSIONS['1.3.0']
+    tag = version['tag']
+    pins = verify_originals(build, version)
+    inspect(build / 'extract' / tag, pins_of(version))
+    rewrite = verify_rewrite(source, build / f'patched_{tag}', pins)
     profile = source / f'dm/games/{TITLE}'
     # Prevent packaging a cache from a different chain or profile.
     env = dict(os.environ, DM_GAME=TITLE)
@@ -119,7 +125,7 @@ def package(source, build, output, language):
     if stamp != {'game': TITLE, 'inputs': inputs}:
         raise ValueError('shader library stamp differs from the source profile')
     shader_stats = verify_libraries(libraries, profile / 'shader_map.tsv')
-    required = [build / 'tools/dmhost', build / 'patched_v327680/build_src.sha256',
+    required = [build / 'tools/dmhost', build / f'patched_{tag}/build_src.sha256',
                 build / 'font/nintendo_ext.ttf', profile / 'c1_full.tsv', profile / 'cb_extent.tsv']
     for path in required:
         if not path.is_file():
@@ -136,10 +142,12 @@ def package(source, build, output, language):
     resources.mkdir(parents=True)
     macos.mkdir(parents=True)
     try:
-        for src, name in [(build / 'extract/v327680/RomFS', 'RomFS'),
-                          (build / 'patched_v327680', 'patched'), (build / 'font', 'font'),
+        for src, name in [(build / 'extract' / tag / 'RomFS', 'RomFS'),
+                          (build / f'patched_{tag}', 'patched'), (build / 'font', 'font'),
                           (profile, 'profile')]:
             shutil.copytree(src, resources / name)
+        if dlc:
+            shutil.copytree(dlc[0], resources / 'aoc', ignore=shutil.ignore_patterns('.DS_Store'))
         (resources / 'shader-cache').mkdir()
         shutil.copytree(libraries, resources / 'shader-cache' / libraries.name)
         shutil.copy2(build / 'tools/dmhost', resources / 'dmhost')
@@ -148,8 +156,8 @@ def package(source, build, output, language):
         with (partial / 'Contents/Info.plist').open('wb') as stream:
             plistlib.dump({'CFBundleExecutable': 'AgeOfCalamity', 'CFBundleIdentifier': 'org.macnativegames.aoc',
                           'CFBundleName': APP_NAME, 'CFBundleDisplayName': APP_NAME,
-                          'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': '1.3.0',
-                          'CFBundleVersion': '327680', 'LSMinimumSystemVersion': '26.0',
+                          'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': version['name'],
+                          'CFBundleVersion': str(version['code']), 'LSMinimumSystemVersion': '26.0',
                           'NSHighResolutionCapable': True, 'LSApplicationCategoryType': 'public.app-category.games'}, stream)
         subprocess.run(['clang', '-arch', 'arm64', '-mmacosx-version-min=26.0', '-O2', '-Wall', '-Wextra', '-Werror', str(GAME / 'app/launcher.c'),
                         '-o', str(macos / 'AgeOfCalamity')], check=True)
@@ -160,7 +168,7 @@ def package(source, build, output, language):
         report = {'game': pins, 'chain': chain, 'shader_inputs': inputs, 'language': language,
                   'host_sha256': hashlib.sha256((resources / 'dmhost').read_bytes()).hexdigest(),
                   'compiler': subprocess.check_output(['xcrun','-sdk','macosx','metal','--version'],text=True).strip(),
-                  'rewrite_rules': (build / 'patched_v327680/build_src.sha256').read_text()}
+                  'rewrite_rules': (build / f'patched_{tag}/build_src.sha256').read_text()}
         report['repository_head'] = subprocess.check_output(['git','rev-parse','HEAD'],cwd=GAME,text=True).strip()
         # Identify the actual isolated sources including uncommitted AoC changes.
         report['source_files'] = {p.relative_to(GAME).as_posix():hashlib.sha256(p.read_bytes()).hexdigest()
@@ -168,6 +176,7 @@ def package(source, build, output, language):
                                   and '__pycache__' not in p.parts and p.name != '.DS_Store'}
         report['rewrite'] = rewrite
         report['shader_inventory'] = shader_stats
+        report['dlc'] = dlc[1] if dlc else {}
         from inspect_inputs import sha256
         report['outputs'] = {p.relative_to(resources).as_posix():sha256(p)
                              for p in sorted(resources.rglob('*')) if p.is_file()}
@@ -265,6 +274,19 @@ def verify_libraries(libraries, shader_map):
             'metallib_files':sum(1 for _ in libraries.glob('*.metallib'))}
 
 
+def pinned_tools(inherited):
+    """PATH with the folders of BUILD_TOOLS first, and DOTNET_ROOT naming the .NET SDK among them: MacNativeGames' tools/deps makes
+    them once per Mac from pinned sources (~/Library/Caches/MacNativeGames/deps), so the build needs no Homebrew and every Mac builds
+    with the same tools. The shader translator and nx_extract are framework-dependent apphosts, which find the runtime through DOTNET_ROOT."""
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from tools.deps import DepsError, env, path
+    try:
+        return {'PATH': os.pathsep.join([*path(*BUILD_TOOLS), inherited]), **env('dotnet')}
+    except DepsError as error:
+        raise ValueError(f'a build tool could not be made from its pinned source: {error}') from error
+
+
 def environment(work):
     env = dict(os.environ, DM_GAME=TITLE, DM_METAL_RUNTIME='0',
                TMPDIR=str(work / 'tmp'), NUGET_PACKAGES=str(work / 'cache/nuget'),
@@ -273,10 +295,7 @@ def environment(work):
                DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_SKIP_FIRST_TIME_EXPERIENCE='1',
                DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE='true',
                MACOSX_DEPLOYMENT_TARGET='26.0')
-    dotnet = work / 'dependencies/dotnet'
-    if dotnet.is_dir():
-        env['DOTNET_ROOT'] = str(dotnet)
-        env['PATH'] = str(dotnet) + os.pathsep + env.get('PATH','/usr/bin:/bin')
+    env.update(pinned_tools(env.get('PATH', '/usr/bin:/bin:/usr/sbin:/sbin')))
     for key in ('TMPDIR', 'NUGET_PACKAGES', 'DOTNET_CLI_HOME'):
         Path(env[key]).mkdir(parents=True, exist_ok=True)
     return env
@@ -284,20 +303,23 @@ def environment(work):
 
 def main():
     import fcntl
-    from inspect_inputs import inspect, write_report
+    from inspect_inputs import inspect, inspect_dlc, pins_of, version_of_input, write_report
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('inputs', type=Path, help='extracted root containing ExeFS/ and RomFS/; no keys needed')
     parser.add_argument('--work-dir', required=True, type=Path)
+    parser.add_argument('--dlc', type=Path, help='1.4.1 only: folder holding one numbered folder per owned DLC, each its extracted RomFS')
     parser.add_argument('--output', type=Path, help='new .app output path (required for package/all)')
     parser.add_argument('--phase', choices=('inspect','rewrite','host','shaders','package','all'), default='all')
     parser.add_argument('--language', default='en-US', choices=('en-US','en-GB','ja','fr','de','es-419','es','it','nl','fr-CA','ru','ko','zh-Hant','zh-Hans','pt-BR'))
     args = parser.parse_args()
     work = args.work_dir.expanduser().resolve()
     original = args.inputs.expanduser().resolve()
+    addons = args.dlc.expanduser().resolve() if args.dlc else None
     output = args.output.expanduser().resolve() if args.output else None
     checkout = GAME.parents[1]
     for path in (work, output):
-        if path and (path == checkout or checkout in path.parents or path == original or original in path.parents or path in original.parents):
+        if path and (path == checkout or checkout in path.parents or any(
+                path == source or source in path.parents or path in source.parents for source in filter(None, (original, addons)))):
             parser.error('work/output must be outside the checkout and original inputs')
     if work in checkout.parents:
         parser.error('work must not contain the checkout')
@@ -309,32 +331,36 @@ def main():
     with (work / 'build.lock').open('a') as lock:
         try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError: raise ValueError('another build owns this work directory')
-        report = inspect(original, GAME / 'assets/expected-1.3.0.json')
+        version = version_of_input(original)
+        tag, pins = version['tag'], pins_of(version)
+        report = inspect(original, pins)
         write_report(report, work / 'input-report.json')
-        print(f"Verified {report['romfs']['files']} RomFS files; container integrity unavailable", flush=True)
+        print(f"Verified {version['name']}: {report['romfs']['files']} RomFS files; container integrity unavailable", flush=True)
+        dlc = (addons, inspect_dlc(addons, version)) if addons else None
+        if dlc: print(f"Verified DLC: {' '.join(dlc[1])}", flush=True)
         if args.phase == 'inspect': return
         source = stage(work)
         build = work / 'build'
-        destination = build / 'extract/v327680'
+        destination = build / 'extract' / tag
         # APFS clones preserve originals and avoid hard links to writable game files.
         if not destination.exists():
-            partial = destination.with_name('v327680.partial')
+            partial = destination.with_name(f'{tag}.partial')
             if partial.exists(): raise ValueError(f'inspect/remove interrupted input copy: {partial}')
             partial.mkdir(parents=True)
             for name in ('ExeFS','RomFS'):
                 subprocess.run(['cp','-cR',str(original/name),str(partial/name)],check=True)
-            inspect(partial, GAME / 'assets/expected-1.3.0.json')
+            inspect(partial, pins)
             partial.rename(destination)
         else:
-            inspect(destination, GAME / 'assets/expected-1.3.0.json')
+            inspect(destination, pins)
         env = environment(work)
         if args.phase != 'package':
             subprocess.run([sys.executable, str(source/'scripts/build_ipa_from_nsp.py'),
                             '--extracted', str(destination), '--work-dir', str(build),
-                            '--phase', args.phase, '--platform','mac','--package','v327680',
+                            '--phase', args.phase, '--platform','mac','--package',tag,
                             '--language',args.language,'--progress','lines'],env=env,check=True)
         if args.phase in ('all','package'):
-            package(source,build,output,args.language)
+            package(source,build,output,args.language,version,dlc)
 
 
 if __name__ == '__main__':

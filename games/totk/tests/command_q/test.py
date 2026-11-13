@@ -10,7 +10,7 @@ with tempfile.TemporaryDirectory(prefix="totk-command-q-") as work:
     subprocess.run([
         "xcrun", "clang", "-std=c11", "-fobjc-arc", "-Wall", "-Wextra", "-Werror",
         "-Wno-deprecated-declarations", "-I" + str(source.parents[2] / "third_party/d2r_gfx/gfx/nvn/include"), str(source), "-framework", "Cocoa",
-        "-framework", "QuartzCore", "-framework", "Metal", "-framework", "CoreVideo",
+        "-framework", "QuartzCore", "-framework", "Metal", "-framework", "CoreVideo", "-framework", "IOKit",
         "-o", str(binary),
     ], check=True)
     for mode, expected in enumerate(("graceful guest shutdown pending", "save done", "gave up")):
@@ -34,3 +34,8 @@ with tempfile.TemporaryDirectory(prefix="totk-command-q-") as work:
     assert inputs.returncode == 0, inputs.stdout + inputs.stderr
     assert "Command input isolation" in inputs.stdout
     print(inputs.stdout.strip())
+
+    screenshots = subprocess.run([str(binary), "5", "0"], capture_output=True, text=True, timeout=15)
+    assert screenshots.returncode == 0, screenshots.stdout + screenshots.stderr
+    assert "nonreused generations" in screenshots.stdout
+    print(screenshots.stdout.strip())

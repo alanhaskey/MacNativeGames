@@ -67,7 +67,7 @@ class WorkDirectoryTests(unittest.TestCase):
                  mock.patch.object(build_app,'git_fetch'):
                 (source/'a.c').write_text('branch one'); (source/'same.c').write_text('unchanged')
                 tree=build_app.prepare_work(work,Path('/usr/bin/python3'),work/'logs')
-                obj=tree/'a.c.o'; obj.write_text('object'); same_before=(tree/'same.c').stat().st_mtime
+                (tree/'build').mkdir(exist_ok=True); obj=tree/'build/a.c.o'; obj.write_text('object'); same_before=(tree/'same.c').stat().st_mtime
                 (source/'a.c').write_text('branch two')
                 old=obj.stat().st_mtime-100
                 for name in ('a.c','same.c'): os.utime(source/name,(old,old))   # the other branch's checkout is older than the object
@@ -75,6 +75,72 @@ class WorkDirectoryTests(unittest.TestCase):
             self.assertEqual((tree/'a.c').read_text(),'branch two')
             self.assertGreaterEqual((tree/'a.c').stat().st_mtime,obj.stat().st_mtime)   # make sees the source as newer than its object
             self.assertEqual((tree/'same.c').stat().st_mtime,same_before)               # an unchanged file keeps its time (no needless rebuild)
+
+    @unittest.skipUnless(shutil.which('rsync'),'rsync needed for real source-copy check')
+    def test_a_source_file_the_checkout_no_longer_has_leaves_the_tree(self):
+        # 2026-11-13: an express update from another branch left that branch's nvn_pool_sources.m in the work folder; the
+        # Makefile's wildcard compiled it with this checkout's headers and the build stopped. The tree mirrors the checkout;
+        # the build's own folders (build/, extracted/, ...) stay.
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            source, external, work=self.fixture(root)
+            def run(command,*_args,**_kwargs):
+                if str(command[0])=='rsync':
+                    subprocess.run([str(x) for x in command],check=True,capture_output=True)
+            with mock.patch.object(build_app,'GAME',source), \
+                 mock.patch.object(build_app,'run',side_effect=run), \
+                 mock.patch.object(build_app,'git_fetch'):
+                (source/'gfx').mkdir(); (source/'gfx/kept.m').write_text('both'); (source/'gfx/branch_only.m').write_text('one branch')
+                tree=build_app.prepare_work(work,Path('/usr/bin/python3'),work/'logs')
+                (tree/'build/gfx').mkdir(parents=True); (tree/'build/gfx/kept.m.o').write_text('object')
+                (tree/'extracted').mkdir(); (tree/'extracted/romfs.bin').write_text('unpacked game data')
+                (source/'gfx/branch_only.m').unlink()
+                build_app.prepare_work(work,Path('/usr/bin/python3'),work/'logs')
+            self.assertFalse((tree/'gfx/branch_only.m').exists())
+            self.assertEqual((tree/'gfx/kept.m').read_text(),'both')
+            self.assertEqual((tree/'build/gfx/kept.m.o').read_text(),'object')
+            self.assertEqual((tree/'extracted/romfs.bin').read_text(),'unpacked game data')
+
+    @unittest.skipUnless(shutil.which('rsync'),'rsync needed for real source-copy check')
+    def test_game_files_in_the_checkout_are_not_copied(self):
+        # 2026-11-04: games/botw/botw.xci and its NSPs went into BotW_build/botw on every build, 18 GB more on the disk
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            source, external, work=self.fixture(root)
+            botw=root/'botw'; (botw/'assets').mkdir(parents=True)
+            (botw/'assets/shader_list.tsv').write_text('rows')
+            for name in ('botw.xci','botw-1.9.0.nsp','dlc/DLC1.NSP','prod.keys','title.tik','base.nsz','base.XCZ','x.nca','x.ncz'):
+                (botw/name).parent.mkdir(parents=True,exist_ok=True); (botw/name).write_text('game')
+            (source/'prod.keys').write_text('keys')
+            def run(command,*_args,**_kwargs):
+                if str(command[0])=='rsync':
+                    subprocess.run([str(x) for x in command],check=True,capture_output=True)
+            with mock.patch.object(build_app,'GAME',source), \
+                 mock.patch.object(build_app,'BOTW',botw), \
+                 mock.patch.object(build_app,'NS2',{}), \
+                 mock.patch.object(build_app,'run',side_effect=run), \
+                 mock.patch.object(build_app,'git_fetch'):
+                tree=build_app.prepare_work(work,Path('/usr/bin/python3'),work/'logs')
+            copied=sorted(str(p.relative_to(work)) for p in work.rglob('*') if p.is_file() and 'logs' not in p.parts)
+            self.assertIn('botw/assets/shader_list.tsv',copied)
+            self.assertIn('totk/requirements.txt',copied)
+            self.assertEqual([p for p in copied if p.lower().endswith(build_app.GAME_FILE_SUFFIXES)],[])
+            self.assertTrue(tree.is_dir())
+
+    def test_game_files_an_earlier_build_copied_are_named(self):
+        with tempfile.TemporaryDirectory() as folder:
+            copy=Path(folder)/'botw'
+            (copy/'dlc').mkdir(parents=True); (copy/'extracted').mkdir()
+            (copy/'botw.xci').write_bytes(b'x'*1024); (copy/'dlc/dlc1.NSP').write_text('dlc')
+            (copy/'extracted/main.nca').write_text('the build output, not a copy')   # WORK_COPY_SKIP folders are not looked in
+            (copy/'shader_list.tsv').write_text('rows')
+            self.assertEqual([p.name for p in build_app.left_game_files(copy)],['botw.xci','dlc1.NSP'])
+            with mock.patch.object(build_app,'say') as say:
+                build_app.say_left_game_files(copy)
+                build_app.say_left_game_files(Path(folder)/'missing')
+            self.assertEqual(say.call_count,1)
+            self.assertIn('2 game file(s)',say.call_args[0][0])
+            self.assertIn('botw.xci, dlc1.NSP',say.call_args[0][0])
 
     def test_git_fetch_can_replace_a_dangling_cache_link(self):
         with tempfile.TemporaryDirectory() as folder:

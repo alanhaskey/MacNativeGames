@@ -51,13 +51,16 @@ class DeviceTranslator(unittest.TestCase):
         rt = (TOTK / 'third_party/d2r_gfx/gfx/nvn/totk_shader_rt.m').read_text()
         self.assertIn('#if TARGET_OS_IPHONE && defined(TOTK_DEVICE_XLATE)\n#define DEVICE_XLATE 1', rt)
         self.assertIn('#if TARGET_OS_IPHONE && !defined(DEVICE_XLATE)\n    return 1;', rt)   # no_translator: others as before
-        self.assertIn('totk_xlate_request(json_string(rq).UTF8String, line, sizeof line);', rt)
+        self.assertIn('totk_xlate_request(json_string(request_sent(rq)).UTF8String, line, sizeof line);', rt)   # without the "_" keys (0cbcac96)
         nvn = (TOTK / 'third_party/d2r_gfx/gfx/nvn/nvn_mtl.m').read_text()
         self.assertIn('#if TARGET_OS_IPHONE && !defined(TOTK_DEVICE_XLATE)\n    return 0;   // no translator on the device', nvn)
 
     def test_packaging_builds_and_links_it_for_ios_only(self):
         build_app = (REPO / 'build_app.py').read_text()
-        self.assertEqual(len(re.findall(r'^ +build_device_translator\(tree, logs\)$', build_app, re.M)), 2)   # Tears of the Kingdom and Breath of the Wild
+        self.assertEqual(len(re.findall(r'^ +build_device_translator\(tree, logs\)$', build_app, re.M)), 3)   # Tears of the Kingdom, Breath of the Wild and NS2
+        ns2 = build_app[build_app.index('def main_ns2('):build_app.index('def identify_game(')]
+        self.assertIn("device_app = args.platform == 'ios'", ns2)
+        self.assertIn("if args.platform == 'visionos':", ns2)
         self.assertIn("if args.platform == 'ios':   # visionOS keeps the startup shaders only", build_app)
         func = build_app[build_app.index('def build_device_translator('):build_app.index('def check_translator(')]
         self.assertIn("if n != 'main.cpp'", func)

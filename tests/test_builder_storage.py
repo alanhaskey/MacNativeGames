@@ -1,6 +1,5 @@
 """tools/builder/storage.py (S2.2): where each cache is, what it holds, and the guards that keep a clean or a move
 away from a root, the home folder, a system folder and the game, save or app a caller protects."""
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,21 +12,6 @@ from tools.builder.games import GAMES
 def write(path, data=b'x'):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
-
-
-class WorkFolder(unittest.TestCase):
-    def test_the_saved_work_path_wins(self):
-        folder = storage.work_dir(GAMES['totk'], '/games/Tears.xci', '/elsewhere/TOTK_build')
-        self.assertEqual(folder, Path('/elsewhere/TOTK_build'))
-
-    def test_without_a_saved_path_it_sits_beside_the_game_file(self):
-        folder = storage.work_dir(GAMES['totk'], '/games/Tears.xci', None)
-        self.assertEqual(folder, Path('/games/TOTK_build'))
-        self.assertEqual(storage.work_dir(GAMES['botw'], '/games/BotW.wux', ''),
-                         Path('/games/BotW_build'))
-
-    def test_without_a_game_file_there_is_no_work_folder(self):
-        self.assertIsNone(storage.work_dir(GAMES['totk'], None, None))
 
 
 class ShaderFolder(unittest.TestCase):

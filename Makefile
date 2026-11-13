@@ -11,16 +11,36 @@
 PYTHON ?= $(shell command -v python3.14 >/dev/null 2>&1 && echo python3.14 || echo python3)
 CC ?= cc
 
-.PHONY: check
+# UBSan flags shared by every C unit test. CI runs the same builds via `make check-c`.
+C_TEST_CFLAGS = -std=c11 -Wall -Wextra -Werror -fsanitize=undefined -fno-sanitize-recover=all
+
+# Single list for `make check` and CI. Each stem builds tests/test_<stem>.c unless
+# C_TEST_SRC_<stem> overrides the source; C_TEST_EXTRA_<stem> appends compile args.
+C_TESTS = \
+	romfs_paths \
+	feedback_settings \
+	controller_map \
+	keyboard_map \
+	users \
+	game_language \
+	audio_ramp \
+	bow_state \
+	screenshot \
+	screenshot_botw \
+	agent_slot_limit \
+	agent_slot_limit_oot
+C_TEST_EXTRA_users = games/totk/runtime/account.c -Igames/totk/runtime
+C_TEST_SRC_screenshot_botw = tests/test_screenshot.c
+C_TEST_EXTRA_screenshot_botw = -DGAME_BOTW190
+C_TEST_SRC_agent_slot_limit_oot = tests/test_agent_slot_limit.c
+C_TEST_EXTRA_agent_slot_limit_oot = -DAGENT_SLOT_LIMIT_H_PATH='"../games/oot/runtime/agent_slot_limit.h"'
+
+.PHONY: check check-c
 
 check:
 	$(PYTHON) -m unittest discover -s tests -q
+	@$(MAKE) --no-print-directory check-c
+
+check-c:
 	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT; \
-	 $(CC) -std=c11 -Wall -Wextra -Werror -fsanitize=undefined -fno-sanitize-recover=all \
-	   tests/test_romfs_paths.c -o "$$tmp/test-romfs-paths" && "$$tmp/test-romfs-paths" && \
-	 $(CC) -std=c11 -Wall -Wextra -Werror -fsanitize=undefined -fno-sanitize-recover=all \
-	   tests/test_controller_map.c -o "$$tmp/test-controller-map" && "$$tmp/test-controller-map" && \
-	 $(CC) -std=c11 -Wall -Wextra -Werror -fsanitize=undefined -fno-sanitize-recover=all \
-	   tests/test_keyboard_map.c -o "$$tmp/test-keyboard-map" && "$$tmp/test-keyboard-map" && \
-	 $(CC) -std=c11 -Wall -Wextra -Werror -fsanitize=undefined -fno-sanitize-recover=all \
-	   tests/test_users.c games/totk/runtime/account.c -Igames/totk/runtime -o "$$tmp/test-users" && "$$tmp/test-users"
+	$(foreach t,$(C_TESTS),$(CC) $(C_TEST_CFLAGS) $(or $(C_TEST_SRC_$(t)),tests/test_$(t).c) $(C_TEST_EXTRA_$(t)) -o "$$tmp/test-$(t)" && "$$tmp/test-$(t)" && )true

@@ -7,7 +7,7 @@
 #pragma once
 #include "../third_party/d2r_gfx/gfx/nvn/odyssey_graphics.h"
 #include "../third_party/d2r_gfx/gfx/nvn/totk_shader_contrib.h"   /* the contribution file, TOTK_REPO_URL */
-#include "contrib_submit.h"   /* gh_path, contrib_submit (shared with app/launcher.m) */
+#include "../third_party/d2r_gfx/gfx/nvn/totk_contrib_upload.h"   /* the shader inbox: the 着色器贡献 page (contrib_tab.h) */
 #include "aspect_math.h"     /* aspect_near, ASPECT_GAME */
 #include "keyboard_map.h"    /* the keyboard and mouse layout */
 #include "controller_map.h"  /* the controller layout */
@@ -48,9 +48,12 @@ static void settings_restore_start(void) {
  if(settingsPendingAspect<=0)return;
  settingsRestoreTimer=[NSTimer timerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t){(void)t;settings_restore_ready();}];
  [NSRunLoop.mainRunLoop addTimer:settingsRestoreTimer forMode:NSRunLoopCommonModes];
+ /* The shader contribution (totk_contrib_upload.h): this game asks no question at start (its launcher is a plain C
+    program); the settings panel's switch decides, and when it is on the rows go in the background while playing. */
+ totk_inbox_start(totk_inbox_claim(totk_contrib_path()),@"mac");   /* this game's file only: claimed before the game writes to it */
 }
 
-enum { SETTINGS_PAGE_DISPLAY, SETTINGS_PAGE_INPUT, SETTINGS_PAGE_BINDINGS, SETTINGS_PAGES };
+enum { SETTINGS_PAGE_DISPLAY, SETTINGS_PAGE_INPUT, SETTINGS_PAGE_BINDINGS, SETTINGS_PAGE_CONTRIB, SETTINGS_PAGES };
 static void settings_refresh_all(void);
 static void settings_rebuild(void);
 static void settings_pointer_used(void);
@@ -353,6 +356,8 @@ static NSString *settings_pad_text(int action, const uint16_t *map, int family) 
 -(NSMenu *)menuForInput:(int)input pad:(BOOL)pad;
 @end
 
+#include "contrib_tab.h"   /* the 着色器贡献 page */
+
 @implementation TOTKBindingButton
 -(void)rightMouseDown:(NSEvent *)e{(void)e;if(self.enabled)[self.panel clearBinding:self];}
 @end
@@ -404,7 +409,7 @@ enum { SETTINGS_W = 600, SETTINGS_ROW_H = 34, SETTINGS_GAP = 6, SETTINGS_TOP = 9
  title.textColor=NSColor.whiteColor;title.frame=NSMakeRect(18,h-38,300,24);[self addSubview:title];
  NSButton *close=[NSButton buttonWithTitle:@"✕" target:self action:@selector(close:)];close.bordered=NO;close.refusesFirstResponder=YES;
  close.font=[NSFont systemFontOfSize:15 weight:NSFontWeightBold];close.contentTintColor=NSColor.whiteColor;close.frame=NSMakeRect(W-40,h-40,28,28);[self addSubview:close];
- NSSegmentedControl *tabs=[NSSegmentedControl segmentedControlWithLabels:@[settings_text("画面","Display"),settings_text("输入","Input"),settings_text("按键设置","Key bindings")]
+ NSSegmentedControl *tabs=[NSSegmentedControl segmentedControlWithLabels:@[settings_text("画面","Display"),settings_text("输入","Input"),settings_text("按键设置","Key bindings"),settings_text("着色器贡献","Shaders")]
   trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(tabChanged:)];
  tabs.segmentDistribution=NSSegmentDistributionFillEqually;tabs.refusesFirstResponder=YES;tabs.frame=NSMakeRect(14,h-80,W-28,26);[self addSubview:tabs];self.tabs=tabs;
  NSMutableArray<NSView *> *pages=[NSMutableArray array];
@@ -431,6 +436,7 @@ enum { SETTINGS_W = 600, SETTINGS_ROW_H = 34, SETTINGS_GAP = 6, SETTINGS_TOP = 9
  }
  NSRect bindingsFrame=NSMakeRect(0,SETTINGS_BOTTOM,W,body);
  NSView *bindings=drawings?[self drawingsPageWithFrame:bindingsFrame]:[self bindingsPageWithFrame:bindingsFrame];[self addSubview:bindings];[pages addObject:bindings];
+ NSView *contrib=[self contribPageWithFrame:bindingsFrame];[self addSubview:contrib];[pages addObject:contrib];   /* contrib_tab.h */
  self.pages=pages;
  /* The bottom line: the version on the left (PR #1210; the overlay keeps it too, games/totk, user 2026-10-25); the reset buttons on the right
     of the key bindings page. */
@@ -446,11 +452,10 @@ enum { SETTINGS_W = 600, SETTINGS_ROW_H = 34, SETTINGS_GAP = 6, SETTINGS_TOP = 9
  self.resetButtons=@[resetKeys,resetPad];self.listToggle=toggle;
  /* The display page's bottom right (games/totk, user 2026-10-25, kept on the first page only): contribute the shaders and pipelines the
     shared list lacks, and star the project. */
- NSButton *contrib=[NSButton buttonWithTitle:settings_text("贡献着色器和管线","Contribute shaders and pipelines") target:self action:@selector(contribute:)];
  NSButton *star=[NSButton buttonWithTitle:settings_text("⭐ 给作者点赞","⭐ Star the project") target:self action:@selector(star:)];
- for(NSButton *b in @[contrib,star]){b.controlSize=NSControlSizeSmall;b.font=[NSFont systemFontOfSize:11];b.refusesFirstResponder=YES;[b sizeToFit];
+ for(NSButton *b in @[star]){b.controlSize=NSControlSizeSmall;b.font=[NSFont systemFontOfSize:11];b.refusesFirstResponder=YES;[b sizeToFit];
   b.frame=NSMakeRect(0,5,b.frame.size.width,24);b.wantsLayer=YES;[self addSubview:b];}
- self.displayButtons=@[star,contrib];
+ self.displayButtons=@[star];
  [self selectPage:g_settings_page];[self refresh];
  __weak TOTKSettingsPanel *weak=self;
  self.clickMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown|NSEventMaskRightMouseDown handler:^NSEvent *(NSEvent *e){
@@ -519,6 +524,7 @@ enum { SETTINGS_W = 600, SETTINGS_ROW_H = 34, SETTINGS_GAP = 6, SETTINGS_TOP = 9
  NSMutableArray<TOTKSettingRow *> *rows=[NSMutableArray array];
  for(TOTKSettingRow *r in self.allRows)if(r.page==page)[rows addObject:r];
  self.rows=rows;self.controllerIndex=0;
+ if(page==SETTINGS_PAGE_CONTRIB)[self refreshContribPage];   /* the numbers now, not at the next tick */
  [self layoutFooter];[self updateTargets];[self refreshBindings];
  [self.bindingsScroll.documentView scrollPoint:NSZeroPoint];   /* the list from its top (moving with a controller scrolls) */
  [self.window makeFirstResponder:self.window.contentView];   /* key 1 and Esc keep reaching the window */
@@ -541,25 +547,6 @@ enum { SETTINGS_W = 600, SETTINGS_ROW_H = 34, SETTINGS_GAP = 6, SETTINGS_TOP = 9
   panel.versionLabel.stringValue=settings_version_text();panel.versionLabel.frame=NSMakeRect(18,9,230,16);});
 }
 -(CGFloat)footerButtonsWidth{CGFloat w=0;for(NSButton *b in self.displayButtons)if(!b.hidden)w+=b.frame.size.width+6;return w;}
-/* The shaders and pipelines this game met that the shared list lacks (totk_shader_contrib.h): sent with gh off the main
-   thread, the issue then opened; without gh (or when it fails) the GitHub form opens and Finder shows the file to drag in. */
--(void)contribute:(NSButton *)button{
- NSString *path=totk_contrib_path();NSUInteger rows=path?totk_contrib_read(path).count:0;
- if(!rows){[self note:settings_text("现在没有要贡献的着色器和管线：公共清单里都有了","Nothing to contribute now: the shared list has them all")];return;}
- button.enabled=NO;[self note:[NSString stringWithFormat:@(TOTK_UI("正在提交 %lu 条着色器和管线…","Sending %lu shaders and pipelines…")),(unsigned long)rows]];
- __weak TOTKSettingsPanel *weak=self;
- dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{
-  NSString *gh=gh_path(),*issue=gh?contrib_submit(gh,path,rows):nil;
-  dispatch_async(dispatch_get_main_queue(),^{
-   button.enabled=YES;
-   if(issue){totk_contrib_reminded(path,rows);   /* the launcher's reminder counts from here */
-    [weak note:[NSString stringWithFormat:@(TOTK_UI("已提交 %lu 条，谢谢你的贡献！","Sent %lu, thank you for contributing!")),(unsigned long)rows]];
-    [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:issue]];fprintf(stderr,"[totk] settings: contribution sent, %s\n",issue.UTF8String);return;}
-   [weak note:gh?settings_text("自动提交没成功：已打开提交页面，把访达里的文件拖进去","Sending did not work: drag the file Finder shows into the form")
-                           :settings_text("已打开提交页面：把访达里的文件拖进去","The form is open: drag the file Finder shows into it")];
-   [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@TOTK_CONTRIB_ISSUE_URL]];
-   [NSWorkspace.sharedWorkspace activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:path]]];});});
-}
 /* The project's GitHub page, where the player stars it (as the launcher's star button). */
 -(void)star:(id)sender{(void)sender;[NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@TOTK_REPO_URL]];
  [self note:settings_text("谢谢支持！在打开的 GitHub 页面右上角点 Star","Thank you! Click Star at the top right of the GitHub page")];}
@@ -567,7 +554,8 @@ enum { SETTINGS_W = 600, SETTINGS_ROW_H = 34, SETTINGS_GAP = 6, SETTINGS_TOP = 9
    switch, the controller's buttons (the controller drawing) and the buttons below. */
 -(void)updateTargets{
  [self.controllerTargets removeAllObjects];self.padOrder=@[];
- if(self.page!=SETTINGS_PAGE_BINDINGS){for(TOTKSettingRow *r in self.rows)[self.controllerTargets addObject:r.control.superview];
+ if(self.page==SETTINGS_PAGE_CONTRIB)[self.controllerTargets addObjectsFromArray:[self contribPageTargets]];
+ else if(self.page!=SETTINGS_PAGE_BINDINGS){for(TOTKSettingRow *r in self.rows)[self.controllerTargets addObject:r.control.superview];
   for(NSButton *b in self.displayButtons.reverseObjectEnumerator)if(!b.hidden)[self.controllerTargets addObject:b];}
  else if(!self.drawings){[self.controllerTargets addObjectsFromArray:self.bindingTargets];
   for(NSButton *b in @[self.resetButtons[0],self.resetButtons[1],self.listToggle])if(!b.hidden&&b.enabled)[self.controllerTargets addObject:b];}
@@ -657,7 +645,7 @@ enum { SETTINGS_W = 600, SETTINGS_ROW_H = 34, SETTINGS_GAP = 6, SETTINGS_TOP = 9
  fprintf(stderr,"[totk] settings: controller %s -> %s\n",controller_physical_names[physical],action<0?"nothing":controller_switch_names[action]);
  [self refreshBindings];
 }
--(void)refresh{for(TOTKSettingRow *r in self.allRows)[r refresh];[self refreshBindings];}
+-(void)refresh{for(TOTKSettingRow *r in self.allRows)[r refresh];[self refreshBindings];if(self.page==SETTINGS_PAGE_CONTRIB)[self refreshContribPage];}
 -(void)refreshBindings{
  if(self.page!=SETTINGS_PAGE_BINDINGS)return;
  if(self.drawings){[self.keyboardDiagram setNeedsDisplay:YES];[self.padDiagram setNeedsDisplay:YES];return;}
@@ -753,6 +741,7 @@ enum { SETTINGS_W = 600, SETTINGS_ROW_H = 34, SETTINGS_GAP = 6, SETTINGS_TOP = 9
 -(BOOL)controllerEnabled:(NSInteger)i{
  if(i<0||i>=(NSInteger)self.controllerTargets.count)return NO;
  if(self.page==SETTINGS_PAGE_BINDINGS)return YES;
+ if(self.page==SETTINGS_PAGE_CONTRIB)return ((NSControl *)self.controllerTargets[(NSUInteger)i]).enabled;   /* the switch */
  TOTKSettingRow *r=self.rows[i];return r.set!=nil&&r.control.enabled;
 }
 /* The controller's place: drawn only once a controller has moved in the panel (g_settings_controller_active). On the
@@ -787,6 +776,7 @@ enum { SETTINGS_W = 600, SETTINGS_ROW_H = 34, SETTINGS_GAP = 6, SETTINGS_TOP = 9
 }
 -(void)controllerChange:(int)step select:(BOOL)select{
  NSInteger i=self.controllerIndex;if(![self controllerEnabled:i])return;
+ if(self.page==SETTINGS_PAGE_CONTRIB){if(select)[(NSControl *)self.controllerTargets[(NSUInteger)i] performClick:nil];return;}   /* A flips the switch */
  if(self.page==SETTINGS_PAGE_BINDINGS){   /* A on a row: wait for the new controller button; on a reset button: press it */
   NSView *target=self.controllerTargets[(NSUInteger)i];
   if(target==self.deviceTabs){self.deviceTabs.selectedSegment=!g_settings_bindings_device;[self deviceChanged:self.deviceTabs];return;}   /* the other device */

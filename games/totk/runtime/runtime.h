@@ -14,6 +14,16 @@ typedef struct {
 } Module;
 extern pthread_key_t runtime_keys[8];
 _Noreturn void runtime_fail(const char *message);
+int runtime_app_mode(void);   /* loader.c: 1 when this binary is the Mac app's own executable (Contents/MacOS), started as the app */
+int runtime_app_launch(int argc, char **argv, char ***boot);   /* app/launcher.m: the player's folders and settings, then -1 to boot */
+void runtime_input_file_start(void);   /* input.c: the TOTK_INPUT_FILE command channel (at start, or after runtime_app_launch) */
+void runtime_cloud_save_start(const char *save_dir, const char *profile_dir);   /* cloud_save.m: save sync through a folder the player chooses (fs_host.c) */
+void runtime_front_notice(const char *title, const char *detail);   /* frontend.m / frontend_ios.m: tell the player (cloud_save.m) */
+void runtime_cloud_save_changed(void);
+void runtime_cloud_save_quit(void);   /* the Mac window closes (frontend.m): uploads what is not uploaded yet */
+/* The Mac's chosen sync folder (TOTK_CLOUD_SAVE_FOLDER) lives in this defaults suite, not the app's own: the app menu
+   (frontend.m) and the launcher (app/launcher.m) may run in processes with different bundle identifiers. */
+#define RUNTIME_SAVE_SYNC_DEFAULTS "org.macnativegames.save-sync"
 void *runtime_symbol(const char *name);
 void *runtime_override(const char *name);
 void runtime_hle_stack_init(uint64_t tsd_offset);
@@ -98,19 +108,22 @@ int runtime_render_res(unsigned *w, unsigned *h);   /* TOTK_RENDER_RES above 160
    canvas at its native size (2K; runtime_output_native gives it), the same with MetalFX scaling it up to the window
    (user 2026-10-25: "4K" as 2K + MetalFX, a 4K swapchain's heaps being too big for one GPU buffer); also 720p, a
    1280x720 canvas whose scene follows it (user 2026-10-25, in place of the Switch's own handheld / docked sizes: the game
-   reads its docked scene size only at the start, so a switch to it never took effect).
+   reads its docked scene size only at the start, so a switch to it never took effect). 720p + MetalFX: that 1280x720
+   canvas with the MetalFX output stage scaling it up to the window, for Macs that cannot hold 1080p.
    Native 4K (1.4.3, an app built with native 4K: build_app.py's default on a Mac with 16 GB or more): a 3840x2160
    canvas and scene (game_patches_v143.c runtime_output_res).
    runtime_output_modes: a bit (1 << mode) for each this game and start offer; 0 when the resolution cannot change. */
 /* OUTPUT_MODE_NATIVE_4K_METALFX (4K + MetalFX to the headset) and OUTPUT_MODE_NATIVE_6K: VR only (zeldaVR,
-   game_patches_v143.c vr_big_mode); after NATIVE_5K, whose number players' graphics-output.txt keeps. */
-enum { OUTPUT_MODE_OFF, OUTPUT_MODE_METALFX, OUTPUT_MODE_NATIVE, OUTPUT_MODE_NATIVE_METALFX, OUTPUT_MODE_720P, OUTPUT_MODE_NATIVE_4K, OUTPUT_MODE_NATIVE_5K, OUTPUT_MODE_NATIVE_4K_METALFX, OUTPUT_MODE_NATIVE_6K };
-enum { OUTPUT_MODE_LAST = OUTPUT_MODE_NATIVE_6K };
+   game_patches_v143.c vr_big_mode); after NATIVE_5K, whose number players' graphics-output.txt keeps. OUTPUT_MODE_720P_METALFX
+   is last for the same reason. */
+enum { OUTPUT_MODE_OFF, OUTPUT_MODE_METALFX, OUTPUT_MODE_NATIVE, OUTPUT_MODE_NATIVE_METALFX, OUTPUT_MODE_720P, OUTPUT_MODE_NATIVE_4K, OUTPUT_MODE_NATIVE_5K, OUTPUT_MODE_NATIVE_4K_METALFX, OUTPUT_MODE_NATIVE_6K, OUTPUT_MODE_720P_METALFX };
+enum { OUTPUT_MODE_LAST = OUTPUT_MODE_720P_METALFX };
 int runtime_output_modes(void);
 int runtime_output_mode(void);
 int runtime_output_mode_set(int mode);                  /* returns 0 where that mode is not offered */
 int runtime_output_native(int mode, unsigned *w, unsigned *h);   /* the canvas of OUTPUT_MODE_NATIVE / _NATIVE_METALFX / _NATIVE_4K; 0 when not offered */
 uint64_t runtime_output_size_current(void);              /* configured canvas: width in low 32 bits, height in high 32 bits */
+int runtime_output_size_set(unsigned w,unsigned h);       /* NS2: queue the native game-thread display rebuild */
 void runtime_warm_progress(uint64_t done,uint64_t total,uint64_t shaders,uint64_t shader_total,uint64_t pipelines,uint64_t pipeline_total);
 void runtime_warm_done(void);
 void runtime_warm_title(void);   /* nvn_mtl.m warm_start: the title may be seen now, the rest of the warm-up behind it or done */
@@ -119,6 +132,7 @@ void runtime_game_slot_acquire(const char *mode);   /* runtime/game_slot.c: one 
 void *runtime_front_override(const char *name);
 int runtime_front_focus(void);
 void runtime_front_hdr_toggle(void);   /* Mac key 8: checked TOTK 1.4.3 HDR / EDR only */
+void runtime_settings_page(int page);   /* tests (input file "settings <page>"): the panel opened on a page, -1 closed (frontend.m; nothing on the phone) */
 void runtime_settings_toggle(void);   /* key 1 (runtime/input.c): the settings panel opens or closes (frontend.m; nothing on the phone) */
 void fps_overlay_set_hud_mode(int mode);   /* gfx/nvn/fps_overlay.h HUD_MODE_*: the panel's overlay choice */
 int fps_overlay_hud_mode(void);
@@ -178,6 +192,8 @@ void runtime_gamepad_settings_enable(int enabled);
 int runtime_gamepad_settings_requested(void);
 int runtime_gamepad_settings_button(void);               /* -1: L3 + R3 together; else the physical button (controller_map.h) */
 void runtime_gamepad_settings_button_set(int physical);   /* the key bindings; saved in controller-settings.txt, -1 the default */
+int runtime_gamepad_screenshot_button(void);               /* the button held 3 s for a screenshot (controller_map.h), -1 none */
+void runtime_gamepad_screenshot_button_set(int physical); /* the key bindings; saved in controller-screenshot.txt (none: "none"), the touchpad the default */
 /* Forget held buttons and sticks: macOS stops delivering controller events (including releases) while the app is in
    the background, so a button held at focus loss would otherwise stay pressed for the game. */
 void runtime_gamepad_clear(void);
@@ -187,6 +203,7 @@ int runtime_gamepad_battery_percent(void);  /* runtime/gamepad.m, main thread: t
 void runtime_gamepad_hid_battery(int left, int percent);   /* runtime/gamepad.m, any thread: a Switch controller's battery read from its HID reports (left: a paired set's left Joy-Con), -1 none */
 int runtime_gamepad_battery_left_percent(void);  /* runtime/gamepad.m: a paired Joy-Con set's left one, -1 none; the percent above is then the right one */
 int runtime_setting_word(const char *name, char *word, size_t size);   /* runtime/gamepad.m: a one-word setting file next to controls.txt; 1 read, 0 none */
+int runtime_texture_pack_active(void);   /* Mac TOTK: explicit TOTK_TEXTURE_PACK=1, frozen before guest memory is reserved */
 void runtime_setting_save(const char *name, const char *word, const char *what);   /* runtime/gamepad.m: saves one; what names it in a failure line */
 int runtime_shared_setting_word(const char *name, char *word, size_t size);   /* runtime/gamepad.m: the same, shared by both games (the folder above controls.txt's) */
 void runtime_shared_setting_save(const char *name, const char *word, const char *what);
@@ -205,6 +222,12 @@ void runtime_mouse_set_hook(void (*hook)(void));   /* the window (frontend.m): m
 void runtime_mouse_move(double dx, double dy);      /* points, AppKit's deltaX / deltaY (down positive) */
 void runtime_mouse_button(int button, int down);    /* main thread; 0 left, 1 right, 2 middle, 3 and 4 the side buttons */
 void runtime_mouse_release(void);                   /* main thread: buttons up, stick centred */
+/* The controller's capture button (runtime/gamepad.m): the Share button of a controller GameController reports, or bit 5 of
+   a Switch controller's 0x30 HID report (a Pro Controller's square button below the D-pad). The hook is called once per
+   press, on the main queue; the window (frontend.m) sets it to save a picture of the game's next frame (runtime/screenshot.h). */
+void runtime_capture_set_hook(void (*hook)(void));
+void runtime_capture_press(void) __attribute__((weak));   /* gamepad.m (weak: probes that link input.c alone): the capture button pressed once (the input file's "capture") */
+void runtime_gamepad_switch_capture(void *controller, int pressed);   /* Switch 0x30 report: 1 while the button is down (any queue) */
 void runtime_touch_pad_set(const RuntimeGamepadState *state);   /* on-screen touch controls (iOS) */
 int runtime_phone_fps(void);                /* d2r_gfx hle_nvn.c, iPhone / iPad: 30 while held at 30 (TOTK_PHONE_FPS), else 60 */
 void runtime_phone_fps_set(int fps);        /* 30 holds 30, anything else up to 60: the touch controls' button, at once */

@@ -446,6 +446,44 @@
 			<key>Type</key>
 			<string>PSGroupSpecifier</string>
 			<key>Title</key>
+			<string>存檔同步 · Save sync</string>
+			<key>FooterText</key>
+			<string>存檔仍保存在本機，副本放進所選資料夾。跨裝置同步需要相同的遊戲使用者 ID，顯示名稱相同仍會分開；新安裝的使用者 ID 不同。下次開啟遊戲時會出現資料夾選擇器，也可長按主畫面圖示選擇 · Saves stay on this device; a copy goes to the chosen folder. Syncing across devices requires the same game user ID; matching display names remain separate, and fresh installations have different IDs. The folder picker appears the next time the game opens; or long-press the Home Screen icon</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSTitleValueSpecifier</string>
+			<key>Key</key>
+			<string>TOTK_CLOUD_SAVE_FOLDER_NAME</string>
+			<key>Title</key>
+			<string>資料夾 · Folder</string>
+			<key>DefaultValue</key>
+			<string>—</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Key</key>
+			<string>TOTK_CLOUD_SAVE_PICK</string>
+			<key>Title</key>
+			<string>選擇資料夾 · Choose folder</string>
+			<key>DefaultValue</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Key</key>
+			<string>TOTK_CLOUD_SAVE_STOP</string>
+			<key>Title</key>
+			<string>停止同步 · Stop syncing</string>
+			<key>DefaultValue</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
 			<string>除錯 · Debug</string>
 			<key>FooterText</key>
 			<string>開啟後把日誌寫進 App 的 Documents/log.txt（在 Mac 上讀取），會稍微影響效能；關閉時不記錄任何日誌。重新啟動遊戲後生效 · writes Documents/log.txt for reading on a Mac (slightly slower); off records nothing. Takes effect after relaunching the game</string>
@@ -457,6 +495,24 @@
 			<string>TOTK_DEBUG_LOG</string>
 			<key>Title</key>
 			<string>記錄日誌 · Debug log</string>
+			<key>DefaultValue</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
+			<string>着色器 · Shaders</string>
+			<key>FooterText</key>
+			<string>开启后，游戏会自动把公共清单里还没有的着色器贡献出去，让大家以后不再卡顿。只发送着色器和管线的标识、游戏和 App 版本、设备型号和系统版本号，以及一个随机编号 · When on, the game contributes the shaders the shared list lacks: identifiers, versions, device model and a random id only</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Key</key>
+			<string>TOTK_CONTRIBUTE_SHADERS</string>
+			<key>Title</key>
+			<string>自动贡献着色器 · Contribute shaders automatically</string>
 			<key>DefaultValue</key>
 			<false/>
 		</dict>

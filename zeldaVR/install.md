@@ -1,5 +1,34 @@
 # Zelda VR: Tears of the Kingdom on a Meta Quest 3
 
+Breath of the Wild also has an adapter for our VR entry. Choose it with
+`zeldaVR/install_vr.sh --game botw -- <your BotW build arguments>`; its Desktop
+entry is named **旷野之息 VR**. The game must match a supported BotW 1.6.0 or
+1.9.0 build. Generated apps and build folders belong outside this source tree.
+
+The BotW adapter keeps the game's Labo option unavailable. It uses the native
+same-frame stereo renderer independently, passes each eye's projection and the
+headset IPD to our camera/compositor, and captures the complete stereo canvas.
+The native comfort mask and lens distortion are removed from the display path;
+the Mac window receives one plain stereo copy. Quest tracking goes directly to
+our camera, without a second connection to the game's console sensor. Native
+UI screen parallax is disabled at its producer, and menus use their actual UI
+camera aspect on the same screen plane as our overlay. Weapon shortcuts retain
+the paused world's stereo projection and source rotation. Full-eye restoration
+and background layers preserve canvas coordinates; HUD widgets alone receive
+the binocular ray transform. Its VR settings omit
+alternating-eye rendering; legacy alternating-eye camera
+offsets and the angular dead band do not run in this adapter. Renderer mode is
+fixed to same-frame docked stereo. BotW 1.6.0 has the
+player-position source for first person; 1.9.0 currently keeps third person.
+BotW 1.6.0 has been tested on Mac with a Quest 3: native same-frame capture,
+per-eye Quest FOV, source-pose angular reprojection, world HUD ray alignment,
+and live rendering-size changes with a fixed streaming size. Third person is
+the default; the legacy positional 6DoF and Mac lens-preview/zoom controls are
+unavailable in BotW, including through previously saved options. Map and inventory composition, clipping,
+and menu depth have also been checked on BotW 1.6.0. BotW 1.9.0 has not had the
+same Quest acceptance checks or the native UI producer adaptation. The
+one-picture rendering described below applies to TotK.
+
 [English](#english) · [中文](#中文)
 
 ## English
@@ -9,10 +38,11 @@ It is not a flat screen floating in the headset: the game draws the view for eve
 
 - **6DoF**: turning your head turns the game camera (3 degrees of freedom, always on). With **Head position (6DoF)** on in
   the VR page, leaning and crouching move the camera too (all 6 degrees of freedom, up to a metre each way).
-- **Stereo** (experimental, off by default; **Stereo (the eyes rendered in turn)** in the VR page, with **Stereo · eye
-  distance** 30–200%): the game renders its frames for the left and the right eye in turn, so each eye sees a picture
-  the game really drew from where that eye is, at no cost in frame rate. Each eye refreshes at half the game's frame
-  rate and the eyes are a frame apart, which can make moving uncomfortable. Without it both eyes see one picture.
+- **One picture for both eyes**: the game renders every update once, with a view wide enough to cover both eyes, and
+  the headset looks that picture up for each eye by the eye's own rays. The picture carries the projection and rotation
+  it was really rendered with, so turning the head reprojects it to the latest pose. There is no stereo depth yet: both
+  eyes see the same picture. Full menus (inventory, map) are shown flat on a fixed screen 2 m ahead of where you looked
+  when the headset connected (recentre with both stick clicks).
 - **First person** (Link's head hidden, the camera at his eyes) or **third person**. `P` switches between them (eased
   over 0.6 s); a camera spring smooths the head's bob while running.
 - **Game sound in the headset** (the Mac's speakers go quiet while it is connected).
@@ -102,7 +132,7 @@ sources.
 《王国之泪》1.4.3 照常在 Mac 上运行，画面通过 USB-C 数据线送到 **Meta Quest 3**。不是把平面画面挂在头显里：游戏按每一个头部姿态重新渲染画面。
 
 - **6DoF**：转头，游戏镜头跟着转（3 个自由度，一直开着）。在 VR 页打开 **头部位置（6DoF）** 后，探身、下蹲也会移动镜头（完整的 6 个自由度，每个方向最多 1 米）。
-- **立体**（试验性，默认关；VR 页的 **立体（左右眼轮流渲染）**，配合 **立体 · 两眼间距** 30–200%）：游戏轮流按左眼、右眼的位置渲染，每只眼看到的都是游戏从这只眼的位置真画出来的画面，不掉帧。每只眼的刷新是游戏帧率的一半，两只眼差一帧，移动时可能让人不舒服。关着时两只眼看同一张画面。
+- **两只眼共用一幅画面**：游戏的每次更新只渲染一遍，视野宽到同时盖住两只眼；头显按每只眼自己的视线从这幅画面里取图。画面带着它真正渲染时的投影和朝向，转头时按最新姿态重投影。目前还没有立体深度：两只眼看到的是同一幅画面。完整菜单（背包、地图）平铺在头显连接时正前方 2 米的固定屏上（同时按下两个摇杆可重新摆正）。
 - **第一人称**（隐藏林克的头，镜头在眼睛的位置）或**第三人称**，按 `P` 切换（0.6 秒平滑过渡）；奔跑时头部的晃动由镜头弹性平滑掉。
 - **游戏声音进头显**（头显连着时 Mac 扬声器静音）。
 - **Quest 3 手柄和体感手势**（挥剑、举盾、拉弓、口哨）：已经做进去，还没在头显里实测。Mac 上连的手柄（DualSense、Xbox）照常能用。
@@ -155,6 +185,8 @@ zeldaVR/install_vr.sh -- "<本体 .xci 或 .nsp>" -k "<prod.keys>" --update "<1.
 | 设置面板 | `1` | 按住左手 X 0.6 秒 |
 
 **设置面板的 VR 页**（按 `1` 打开，最后一个标签）：每眼分辨率、**头部位置（6DoF）**、**立体**和两眼间距、第一人称 / 第三人称、第一人称镜头弹性、第三人称摄像机距离、林克的头、体感操作，以及 Mac 窗口是否按 Quest 镜片的形状显示。那里的“游戏渲染分辨率”就是画面页的同一个设置；VR 另外多了按头显形状的原生 4K、4K + MetalFX 和原生 6K。
+
+旷野之息 1.6.0 的 VR 页使用独立渲染设置：每眼提供 0.625×（1280×1380）、0.75×（1536×1656）、0.875×（1792×1932）、1.0×（2048×2208）、1.25×（2560×2760）、1.5×（3072×3312）、1.75×（3584×3864）、2.0×（4096×4416）。选择后下一游戏帧应用，无需重启。串流固定为每眼 2048×2208，改变渲染档位不重连头显；桌面分辨率和比例设置不覆盖 VR。游戏自己的 Labo 选项始终禁用。
 
 ### 出问题时
 

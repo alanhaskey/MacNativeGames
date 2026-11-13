@@ -371,15 +371,19 @@ class UpdateRuntime(unittest.TestCase):
         app, res, _ = self.app()
         tree = self.root / 'tree'
         for rel in ('build/totk-native-v143', 'build/spirv-cross/spirv-cross', 'prebuilt/macos-arm64/totk_xlate',
-                    'build/pso_manifest.tsv', 'build/pso_title.tsv', 'build/app-launcher'):
+                    'build/pso_manifest.tsv', 'build/pso_title.tsv'):
             (tree / rel).parent.mkdir(parents=True, exist_ok=True)
             (tree / rel).write_bytes(b'new ' + rel.encode())
         before = {p: p.read_bytes() for p in res.rglob('*') if p.is_file()}
         with patch.object(build_app, 'run') as run:
             build_app.place_runtime(tree, app, 'v143', self.root / 'logs', lists=False)
-        run.assert_not_called()   # lists=False: the shared list is not resolved
+        self.assertEqual(run.call_count, 1)   # HUD metadata still refreshes; lists=False keeps shader lists.
+        command = run.call_args.args[0]
+        self.assertEqual(Path(command[1]).name, 'prepare_prompt_hud.py')
+        self.assertEqual(command[0], tree / '.venv/bin/python')   # Python 3.14, whatever ran the build (#2099)
+        self.assertEqual(command[command.index('--app') + 1], app)
         self.assertEqual((res / 'build/totk-native').read_bytes(), b'new build/totk-native-v143')
-        self.assertEqual((app / 'Contents/MacOS/TOTK').read_bytes(), b'new build/app-launcher')
+        self.assertEqual((app / 'Contents/MacOS/TOTK').read_bytes(), b'new build/totk-native-v143')   # the game is the app's executable
         self.assertFalse((res / 'build/pso_title.tsv').exists(), 'lists=False keeps the app\'s lists')
         for path, content in before.items():
             self.assertEqual(path.read_bytes(), content, f'{path} is a game file')
@@ -388,6 +392,41 @@ class UpdateRuntime(unittest.TestCase):
         cmd = run.call_args[0][0]
         self.assertEqual(cmd[2:5], ['resolve', res / 'build/shader-seed', tree / 'assets/shader_list.tsv'])
         self.assertEqual(cmd[5:], [res / 'build/pso_manifest.tsv', res / 'build/pso_title.tsv'])
+
+
+class ModCopySteps(unittest.TestCase):
+    def test_the_manifest_command_uses_the_builds_python(self):
+        """make_mod_manifest.py reads zstd with Python 3.14's standard library; the build may have been started with an
+        older python3, so the printed command names the work folder's environment, as the build's own steps do (#2099)."""
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            (root / 'mod/romfs').mkdir(parents=True)
+            lines = []
+            with patch.object(build_app, 'say', lines.append):
+                build_app.say_mod_copy_steps(root / 'mod', root / 'tree', 'v143', root / 'Out.app')
+            command = next(line for line in lines if 'make_mod_manifest.py' in line)
+            self.assertTrue(command.strip().startswith(f'"{root / "tree/.venv/bin/python"}" '), command)
+
+
+class VrRenderOverlay(unittest.TestCase):
+    def test_the_overlay_runs_with_the_builds_python(self):
+        """make_output_res_overlay.py reads zstd with Python 3.14's standard library, so update_runtime.py --vr runs it
+        with the work folder's environment, not the Python that started the update (#2099)."""
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            tree, data = root / 'tree', root / 'data'
+            romfs = tree / 'extracted/v143/romfs'
+            romfs.mkdir(parents=True)
+            data.mkdir()
+            (romfs / 'romfs.bin').write_bytes(b'romfs')
+            (romfs / 'index.json').write_text(json.dumps({'status': 'pass', 'romfs_sha256': 'ab'}))
+            (data / 'romfs-config.txt').write_text('ROMFS_IMAGE_SHA256 ab\nROMFS_IMAGE_SIZE 5\n')
+            with patch.object(update_runtime, 'run') as run:
+                update_runtime.prepare_vr_render_overlay(tree, root / 'res', data, 'v143', root / 'logs', {})
+            self.assertEqual(run.call_args.args[0][:2], [tree / '.venv/bin/python', 'scripts/make_output_res_overlay.py'])
+            with patch.object(update_runtime, 'run') as run:   # an explicit PY still wins
+                update_runtime.prepare_vr_render_overlay(tree, root / 'res', data, 'v143', root / 'logs', {'PY': '/x/py'})
+            self.assertEqual(run.call_args.args[0][0], '/x/py')
 
 
 if __name__ == '__main__':

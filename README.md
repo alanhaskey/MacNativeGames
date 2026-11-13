@@ -1,7 +1,7 @@
 # MacNativeGames
 
 <p align="center"><b>A technical exploration: can a Nintendo Switch game's NVN graphics be ported to Metal?</b><br>
-Tested with your own copies of Tears of the Kingdom and Breath of the Wild on Mac, iPhone and iPad. Not an emulator: the game's own ARM64 code runs directly on Apple chips.</p>
+Tested with your own copies of Tears of the Kingdom and Breath of the Wild on Mac, iPhone and iPad, and of Ocarina of Time (Switch 2) on the Mac. Not an emulator: the game's own ARM64 code runs directly on Apple chips.</p>
 
 [English](#english) | [中文](#chinese)
 
@@ -28,14 +28,17 @@ How it works: bring your game file (XCI or NSP) and your `prod.keys`; one script
 ### Switch 2 games (experimental)
 
 Switch 2 games run on the same Tears of the Kingdom runtime: their Ampere (NVN2) shaders go through the same translator,
-and their SDK 20 services through the same host ([docs/ns2-port.md](docs/ns2-port.md)).
+and their SDK 20 services through the same host ([docs/ns2-port.md](docs/ns2-port.md)). Ocarina of Time carries its own copy of
+that runtime in [`games/oot`](games/oot/README.md).
 
 | Game | Version | Platform | Status |
 |---|---|---|---|
+| The Legend of Zelda: Ocarina of Time | update 131072 | Mac | Playable from the title into Kokiri Forest and the village on an M4, not played through; resolution, MetalFX upscaling, frame lock and frame interpolation in the settings panel; [`games/oot`](games/oot/README.md), [install](games/oot/docs/install.md) |
 | Donkey Kong Bananza | update 458752 | Mac | Playable, early; not fully tested |
 | Pokémon Pokopia | 2.0.1 | Mac | Early: plays its opening into the first area (scripted test, not fully played). |
+| Mario Kart World | 1.0.0 | Mac | Community port, experimental; [build instructions](games/mkw/README.md) |
 
-Not yet: packaging them as an app with the build script, iPhone / iPad, DLC.
+Ocarina of Time and Pokopia package as a Mac app with `build_app.py`. Not yet: iPhone / iPad (a build path for Ocarina of Time is being tested), DLC.
 
 ### Switch 1 games
 
@@ -47,6 +50,7 @@ Not yet: packaging them as an app with the build script, iPhone / iPad, DLC.
 | Super Mario Odyssey | 1.3.0, 1.4.1 | Mac | Community port, early | [`games/odyssey`](games/odyssey/README.md) |
 | Bayonetta 3 | 1.2.0 | Mac | Community port, work in progress | [`games/by3`](games/by3/README.md) |
 | Super Mario Bros. Wonder | 1.0.0, 1.2.1 | Mac | Community port, early | [`games/wonder`](games/wonder/README.md) |
+| Pokémon Legends: Arceus | 1.1.1 | Mac | Community port, early | [`games/pla`](games/pla/README.md) |
 | Ori and the Blind Forest: Definitive Edition | 1.0.1 | Mac | Community port | [`games/ori`](games/ori/README.md) |
 | Super Mario Party Jamboree | 2.3.0 | Mac | Community port, experimental | [`games/jamboree`](games/jamboree/README.md) |
 | Mario vs. Donkey Kong | 1.0.1 | Mac | Community port, early | [`games/mvdk`](games/mvdk/README.md) |
@@ -55,22 +59,39 @@ Not yet: packaging them as an app with the build script, iPhone / iPad, DLC.
 | The Legend of Zelda: Echoes of Wisdom | 1.1.0 | Mac | Community port, early | [`games/eow`](games/eow/README.md) |
 | Animal Crossing: New Horizons | 1.2.1; 3.0.1 (experimental) | Mac | Community port | [`games/acnh`](games/acnh/README.md) |
 | Octopath Traveler 0 | 1.0.3, 1.0.4, 1.0.5 | Mac | Community port, work in progress | [`games/ot0`](games/ot0/README.md) |
-| Hyrule Warriors: Age of Calamity | 1.3.0 | Mac | Community port, experimental | [`games/aoc`](games/aoc/README.md) |
+| Hyrule Warriors: Age of Calamity | 1.3.0, 1.4.1 | Mac | Community port, experimental | [`games/aoc`](games/aoc/README.md) |
 | Mario Kart 8 Deluxe | 4.0.1 | Mac | Community port, early | [`games/mk8d`](games/mk8d/README.md) |
 | Kirby and the Forgotten Land | 1.0.0 | Mac | Community port, early | [`games/kirby`](games/kirby/README.md) |
 | Luigi's Mansion 3 | 1.2.0 | Mac | Community port, work in progress; playable | [`games/lm3`](games/lm3/README.md) |
 | Astral Chain | 1.0.1 | Mac | Community port, work in progress; the first frame is presented and the title flow runs | [`games/alc`](games/alc/README.md) |
-| Xenoblade Chronicles 3 | 1.0.0, 2.2.1 | Mac | Community port, work in progress | [`games/xc3`](games/xc3/README.md) |
+| Xenoblade Chronicles 3 | 1.0.0, 2.2.1 | Mac | Community port, playable; a few shaders translate on first use | [`games/xc3`](games/xc3/README.md) |
 | Pokémon Violet | 4.0.0 | Mac | Community port, work in progress | [`games/pokesv`](games/pokesv/README.md) |
+| Xenoblade Chronicles X: Definitive Edition | 1.0.0; 2.0.0 (diagnostic) | Mac | Community diagnostic host, early field gameplay; external work folder required | [`games/xcx`](games/xcx/README.md) |
+| Tomodachi Life: Living the Dream | 1.0.0 | Mac | Community port, experimental | [`games/tomodachi`](games/tomodachi/README.md) |
+| The Legend of Zelda: Link's Awakening | 1.1.0 | Mac | Community port, experimental | [`games/la`](games/la/README.md) |
 
 Community ports keep their own runtime, graphics layer and scripts in their folder and are built with the steps there.
 
-### VR: Tears of the Kingdom on a Meta Quest 3 (6DoF)
+### VR: Tears of the Kingdom and Breath of the Wild on a Meta Quest 3 (6DoF)
 
 > **Play Tears of the Kingdom 1.4.3 in a Meta Quest 3, with full 6DoF.** The game runs on your Mac and draws the view
 > for every head pose, streamed to the headset over the USB-C cable: turn your head and the camera turns; lean and crouch
-> and it moves (Head position, 6DoF). First or third person, the game's sound in the headset, about 72 fps at 1680×1760
-> per eye on an M4. Quest 3 controllers and motion gestures are built in but not yet tested on a headset.
+> and it moves (Head position, 6DoF). First or third person, the game's sound in the headset. Quest 3 controllers and
+> motion gestures are built in but not yet tested on a headset.
+
+- **Tears of the Kingdom 1.4.3:** the game renders one picture per frame, wide enough for both eyes, and each eye looks
+  it up along its own rays; turning the head reprojects it to the newest pose. The picture is what the game draws
+  without VR (grass, lighting, shadows). The stream to the headset is HEVC at the render size per eye chosen in the VR page
+  (at most 2048×2208); on an M4 at 1536×1656 a Quest 3 showed about 70 fps and about 70 ms from input to display
+  (measured 2026-11-10; 2048×2208 H.264, the setting before, gave 53 fps and 132 ms). Both eyes see the same picture, so there is
+  **no stereo depth by default**.
+- **Stereo depth for Tears of the Kingdom (experimental, off by default):** the game still runs each frame once; the
+  graphics layer replays the frame once per eye with the eye moved sideways by half the eye distance, so both eyes are
+  real renderings of the same moment. It costs about half the frame rate (about 30 fps against 53 with one picture, at
+  2048×2208 on an M4) and has no switch in the VR page yet. The game has no stereo renderer of its own, and an earlier attempt
+  that ran the game's render jobs twice was removed because it damaged the picture (no grass, wrong lighting).
+- **Breath of the Wild 1.6.0 / 1.9.0:** the game's own same-frame stereo renderer (the one of its Labo VR mode) draws
+  both eyes with the headset's projection and eye distance; see the install page for its settings and limits.
 
 One script builds and installs it, the headset side included: [`zeldaVR/install.md`](zeldaVR/install.md) (code in
 [`zeldaVR`](zeldaVR)). VR stays off in the normal app.
@@ -100,18 +121,32 @@ repository.
 > [!TIP]
 > **Every shader in the shared list is ready before you play.** On a Mac the game does not stop to compile it, and on an iPhone or iPad nothing is missing from the picture. The more places players cover, the smoother the game gets for everyone.
 
-The [shared shader list](docs/shader-list.md) now holds **14,794 shader variants** (12,619 shaders) from the Mac, iPhone and iPad: only states a build does not make by itself, since every build makes each shader's default variant. Every build makes them from the player's own game files, so the list holds identifiers only, never game data. Helping takes no setup:
+The [shared shader list](docs/shader-list.md) now holds **18,238 shader variants** (14,725 shaders) from the Mac, iPhone and iPad: only states a build does not make by itself, since every build makes each shader's default variant. Every build makes them from the player's own game files, so the list holds identifiers only, never game data. Helping takes no setup:
 
 1. **Play.** Every build carries each shader of the game for its default bind state. When your game meets a shader in a state that variant does not serve, or builds a render pipeline the app's list lacks, it notes it in `shader-list-contribution.txt`; default variants are never noted.
-2. **On a Mac, every 100 new rows (shaders and pipelines together) it asks you once, before the game starts.** Click "Send": the GitHub form opens and the file is shown, ready to drag in. If the GitHub CLI (`gh`) is installed and signed in, the dialog offers "Submit automatically" instead, which sends this batch for you (a private gist and an issue) without opening the browser. An iPhone or iPad never asks during play: while it is connected to the Mac that built its app (cable or the same Wi-Fi), the Mac asks instead. "Don't remind me again" stops the reminders.
+2. **Once the file holds 100 new rows (shaders and pipelines together), the game asks you one question before it starts**, the same on a Mac, iPhone and iPad. With "Contribute shaders" the game sends the rows over HTTPS to the shader inbox ([mac-native-games.com](https://mac-native-games.com)) on its own, shortly after it starts and then every half hour, and never interrupts your play. "Don't contribute" sends nothing. The switch in Settings changes your answer at any time.
 3. **Everyone's next build carries them.** Nobody stutters there again.
 
-**[Send your shaders →](https://github.com/ly05010419/MacNativeGames/issues/new?template=shader-list.yml)** · The game never uploads anything by itself.
+Only shader and pipeline identifiers, the game and app versions, the device model and system version and a random id are sent (on a Mac also the random id and nickname of the contributors board): no game data, saves or personal information. Nothing is sent before you answer "Contribute shaders". There is nothing to file by hand: contributions are no longer taken as GitHub issues (since 12 November 2026).
 
 **Stuttering when you first start playing or enter a new scene is expected while new shaders compile—don't be surprised.** Performance typically improves as the cache warms up, and every shader the [shared list](#lets-maintain-the-shader-list-together-no-more-stutter) gains is one nobody stutters on again.
 
 ## What's new
 
+- **2026-11-11: Rankings, an anonymous frame-rate board (Tears of the Kingdom, Breath of the Wild, Ocarina of Time, Mac).**
+  A settings tab of its own (key 1) shows the latest board, one group per frame lock and interpolation setting. **Join the
+  board** is off by default and never asked; once on, the session is kept on your Mac every 5 minutes and sent at start and
+  every 30 minutes; your own row is green and everyone shows as an anonymous name ([controls](docs/controls.md)).
+  Shader contributions are now sent at start and every 30 minutes as well.
+- **2026-11-10: The Legend of Zelda: Ocarina of Time (Switch 2) on the Mac.** Build it from your own dump (a `.nup` file or a
+  dump folder with update 131072) with `build_app.py`; no keys needed. On an M4 it plays from the title into Kokiri Forest and the
+  village, about 81–83 fps standing in the village at 720p or 1080p (from 720p); 720p is the default. The settings panel (key 1) has the resolution,
+  the upscaler (MetalFX or the game's own), a frame lock and MetalFX frame interpolation ([games/oot](games/oot/README.md),
+  [install](games/oot/docs/install.md)).
+- **2026-11-09: experimental Xenoblade Chronicles X 2.0.0 Mac diagnostic.** Separate integrity pins, cumulative update merge and version-aware packaging; original 30 FPS by default, opt-in checked 60/120 timing experiment awaiting broader acceptance ([details](games/xcx/README.md#update-200-mac-diagnostic)).
+- **2026-11-08: The Legend of Zelda: Link's Awakening 1.1.0 on Mac, experimental.** Built from your own files; played by hand around Mabe Village ([games/la](games/la/README.md)).
+- **2026-11-07: Hyrule Warriors: Age of Calamity builds from update 1.4.1 as well as 1.3.0 on Mac, experimental.** The builder takes the version from the extracted game folder ([`games/aoc`](games/aoc/README.md)).
+- **2026-11-03: optional SMAA and FXAA Quality for Tears of the Kingdom 1.4.3 on Mac.** Choose the method and its quality separately on the Effects page; the game's original FXAA remains the default ([controls](docs/controls.md)).
 - **2026-11-03: the first Switch 2 games, experimental.** Donkey Kong Bananza plays on the Mac from a development build;
   Pokémon Pokopia plays its opening into the first area (scripted test). Pokopia 2.0.1 packages as a Mac app from your
   own dump folder: `python3 build_app.py <dump folder> --shared-fonts <the six .bfttf files a TOTK / BotW build
@@ -127,9 +162,10 @@ The [shared shader list](docs/shader-list.md) now holds **14,794 shader variants
 
 Everything from building the app to playing is in **[docs/install.md](docs/install.md)**. The recommended way is to hand it to an AI assistant with the [install skill](.claude/skills/install-zelda/SKILL.md) (see the top of this page) rather than run the steps yourself:
 
-- [What you need](docs/install.md#what-you-need) · [Build with a window](docs/install.md#build-with-a-window) · [Build the app](docs/install.md#build-the-app) · [Breath of the Wild](docs/install.md#breath-of-the-wild) · [iPhone and iPad](docs/install.md#iphone-and-ipad) · [Apple Vision Pro](docs/install.md#apple-vision-pro)
+- [What you need](docs/install.md#what-you-need) · [Build with MNG Launcher or an AI](docs/install.md#build-with-mng-launcher-or-an-ai) · [Build the app](docs/install.md#build-the-app) · [Breath of the Wild](docs/install.md#breath-of-the-wild) · [iPhone and iPad](docs/install.md#iphone-and-ipad) · [Apple Vision Pro](docs/install.md#apple-vision-pro)
 - [Controls](docs/controls.md) · [Where things are](docs/install.md#where-things-are) · [Known issues](docs/install.md#known-issues)
 - [Test records](docs/test-records.md)
+- Ocarina of Time (Switch 2): [games/oot/docs/install.md](games/oot/docs/install.md)
 - Red Alert 2 and Yuri's Revenge: [windows_games/ra2/install.md](windows_games/ra2/install.md)
 
 ## How it works
@@ -149,9 +185,10 @@ Measuring by game state with the Metal performance tools of macOS 27 (`TOTK_STAT
 - **Ryujinx** (MIT): the shader translator (`vendor/ryujinx`, built ahead into `games/totk/prebuilt/macos-arm64/totk_xlate`) and a reference for the system services; the sound effects and the mixer in `games/totk/runtime` are ported from Ryujinx.Audio.
 - **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)** (Apache-2.0) turns SPIR-V into Metal Shading Language; it is fetched at a pinned commit and compiled with clang during the build.
 - **[hactool](https://github.com/SciresM/hactool)** (ISC, with its bundled mbedTLS, Apache-2.0): merges the base game and its update at build time; fetched at a pinned commit.
-- **deko3d** (zlib): texture layout sizes. **[bcdec](https://github.com/iOrange/bcdec)** (MIT or public domain): BC texture decoding. **libopus** and **libvpx** (BSD) from Homebrew: audio and the pre-rendered movies.
+- **deko3d** (zlib): texture layout sizes. **[bcdec](https://github.com/iOrange/bcdec)** (MIT or public domain): BC texture decoding. **libopus** and **libvpx** (BSD), compiled by the build from pinned sources: audio and the pre-rendered movies.
 - **[x86recomp](https://github.com/JTM-rootstorm/x86recomp)** (MIT) is the recompiler and Win32 runtime of the Windows games (`windows_games/ra2/third_party/x86recomp`, with our changes); it builds on **Berkeley SoftFloat 3** (BSD-3-Clause) and **CORE-MATH** (MIT), and on iOS on **SDL3** (zlib), **glslang**, **SPIRV-Cross** and a decoders-only **ffmpeg** (LGPL). Its Simplified Chinese is converted with **[OpenCC](https://github.com/BYVoid/OpenCC)** (Apache-2.0), the added glyphs drawn from **[Noto Sans CJK](https://github.com/notofonts/noto-cjk)** (Source Han Sans, SIL OFL 1.1).
 - **[BasaltVR](https://github.com/frenchbaguetteman/BasaltVR)** (MIT) streams the VR picture: `zeldaVR/install_vr.sh` fetches it at a pinned commit and applies our changes (`zeldaVR/streamer/basaltvr.patch`). On the headset, the **[ALVR](https://github.com/alvr-org/ALVR)** client (MIT) shows it; it is downloaded from ALVR's releases and checked by its SHA-256. **[BotW-BetterVR](https://github.com/Crementif/BotW-BetterVR)** (MIT), UEVR and R.E.A.L. were references for the camera, first person and motion controls; no code is copied.
+- **Ocarina of Time** (`games/oot`; every source is listed in [its COPIES.md](games/oot/third_party/COPIES.md)): the NUP reader is **[nup](https://github.com/a55uka/nup)** (MIT); the AV1 movie decoder is adapted from **nxnative**, and the mesh and task shader stages, the HMMA matrix lowering and the typed pool arrays from **[ChiefSZ13/nxnative](https://github.com/ChiefSZ13/nxnative)** (MIT); **dav1d** (BSD-2-Clause) is bundled as the AV1 fallback; **zbic** (GPLv2) is run as a separate build tool, never copied or shipped. NVIDIA's CUDA Binary Utilities and PTX documents and Mesa's NAK were references for Ampere instruction semantics, and **[Lichii](https://github.com/zortos293/Lichii)** (GPL-3.0) for field meanings only; no code from it is copied.
 - Community ports that carry code from elsewhere list it in their own folder (`third_party/COPIES.md`). The main project's and the Windows games' copied code, with each license, is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
@@ -185,14 +222,16 @@ Apple、Mac、iPhone、iPad、Apple Vision Pro 和 Metal 是 Apple Inc. 的商�
 ### Switch 2 游戏（实验性）
 
 Switch 2 游戏在《王国之泪》同一套运行时上运行：它们的 Ampere（NVN2）着色器走同一个翻译器，SDK 20 的系统服务由同一个宿主
-应答（[docs/ns2-port.md](docs/ns2-port.md)）。
+应答（[docs/ns2-port.md](docs/ns2-port.md)）。时之笛在 [`games/oot`](games/oot/README.md) 里带着这套运行时自己的一份。
 
 | 游戏 | 版本 | 平台 | 状态 |
 |---|---|---|---|
+| 塞尔达传说 时之笛 | 更新 131072 | Mac | 在 M4 上从标题玩进科奇里森林和村子，没有通关；设置面板里有分辨率、MetalFX 放大、锁帧和补帧；[`games/oot`](games/oot/README.md)，[安装](games/oot/docs/install.zh-CN.md) |
 | 大金刚 Bananza | 更新 458752 | Mac | 初步可玩，早期，未完整测试 |
 | 宝可梦 Pokopia | 2.0.1 | Mac | 早期：能玩过开场进到第一个区域（脚本测试，没有完整玩过）。 |
+| 马力欧卡丁车 世界 | 1.0.0 | Mac | 社区移植，实验性；[构建说明](games/mkw/README.md) |
 
-还没有：用打包脚本打成 App、iPhone / iPad、DLC。
+时之笛和 Pokopia 可以用 `build_app.py` 打包成 Mac App。还没有：iPhone / iPad（时之笛的打包路径在测试中）、DLC。
 
 ### Switch 1 游戏
 
@@ -204,6 +243,7 @@ Switch 2 游戏在《王国之泪》同一套运行时上运行：它们的 Ampe
 | 超级马力欧 奥德赛 | 1.3.0、1.4.1 | Mac | 社区移植，早期 | [`games/odyssey`](games/odyssey/README.md) |
 | 猎天使魔女 3 | 1.2.0 | Mac | 社区移植，开发中 | [`games/by3`](games/by3/README.md) |
 | 超级马力欧兄弟 惊奇 | 1.0.0、1.2.1 | Mac | 社区移植，早期 | [`games/wonder`](games/wonder/README.md) |
+| 宝可梦传说 阿尔宙斯 | 1.1.1 | Mac | 社区移植，早期 | [`games/pla`](games/pla/README.md) |
 | 奥日与黑暗森林 终极版 | 1.0.1 | Mac | 社区移植 | [`games/ori`](games/ori/README.md) |
 | 超级马力欧派对 空前盛会 | 2.3.0 | Mac | 社区移植，实验 | [`games/jamboree`](games/jamboree/README.md) |
 | 马力欧 vs. 大金刚 | 1.0.1 | Mac | 社区移植，早期 | [`games/mvdk`](games/mvdk/README.md) |
@@ -212,21 +252,34 @@ Switch 2 游戏在《王国之泪》同一套运行时上运行：它们的 Ampe
 | 塞尔达传说 智慧的再现 | 1.1.0 | Mac | 社区移植，早期 | [`games/eow`](games/eow/README.md) |
 | 集合啦！动物森友会 | 1.2.1；3.0.1（实验性） | Mac | 社区移植 | [`games/acnh`](games/acnh/README.md) |
 | 歧路旅人0 | 1.0.3、1.0.4、1.0.5 | Mac | 社区移植，开发中 | [`games/ot0`](games/ot0/README.md) |
-| 塞尔达无双 灾厄启示录 | 1.3.0 | Mac | 社区移植，实验 | [`games/aoc`](games/aoc/README.md) |
+| 塞尔达无双 灾厄启示录 | 1.3.0、1.4.1 | Mac | 社区移植，实验 | [`games/aoc`](games/aoc/README.md) |
 | 马力欧卡丁车8 豪华版 | 4.0.1 | Mac | 社区移植，早期 | [`games/mk8d`](games/mk8d/README.md) |
 | 星之卡比 探索发现 | 1.0.0 | Mac | 社区移植，早期 | [`games/kirby`](games/kirby/README.md) |
 | 路易吉洋馆3 | 1.2.0 | Mac | 社区移植，开发中；可以玩 | [`games/lm3`](games/lm3/README.md) |
 | 异界锁链 | 1.0.1 | Mac | 社区移植，开发中；能出第一帧，标题流程能走 | [`games/alc`](games/alc/README.md) |
-| 异度神剑3 | 1.0.0、2.2.1 | Mac | 社区移植，开发中 | [`games/xc3`](games/xc3/README.md) |
+| 异度神剑3 | 1.0.0、2.2.1 | Mac | 社区移植，可玩；少数着色器首次使用时才翻译 | [`games/xc3`](games/xc3/README.md) |
 | 宝可梦 紫 | 4.0.0 | Mac | 社区移植，开发中 | [`games/pokesv`](games/pokesv/README.md) |
+| 异度神剑 X 终极版 | 1.0.0；2.0.0（诊断） | Mac | 社区诊断宿主，首区域可探索；需要外部工作目录 | [`games/xcx`](games/xcx/README.md) |
+| 朋友收集 梦想生活 | 1.0.0 | Mac | 社区移植，实验性 | [`games/tomodachi`](games/tomodachi/README.md) |
+| 塞尔达传说 织梦岛 | 1.1.0 | Mac | 社区移植，实验性 | [`games/la`](games/la/README.md) |
 
 社区移植的游戏各自在自己的目录里带一份运行时、图形层和脚本，按那里的步骤构建。
 
-### VR：在 Meta Quest 3 里玩王国之泪（6DoF）
+### VR：在 Meta Quest 3 里玩王国之泪和旷野之息（6DoF）
 
 > **在 Meta Quest 3 里玩《王国之泪》1.4.3，完整 6DoF。** 游戏在你的 Mac 上运行，按每一个头部姿态渲染画面，通过 USB-C
-> 数据线串流到头显：转头，镜头跟着转；探身、下蹲，镜头跟着移动（头部位置，6DoF）。第一人称或第三人称，游戏声音进头显，
-> M4 上每眼 1680×1760 约 72 帧。Quest 3 手柄和体感手势已经做进去，还没在头显里实测。
+> 数据线串流到头显：转头，镜头跟着转；探身、下蹲，镜头跟着移动（头部位置，6DoF）。第一人称或第三人称，游戏声音进头显。
+> Quest 3 手柄和体感手势已经做进去，还没在头显里实测。
+
+- **王国之泪 1.4.3**：游戏每帧只渲染一幅画面，视野宽到同时盖住两只眼，每只眼按自己的视线从这幅画面里取图；转头时按最新
+  姿态重投影。画面和不开 VR 时一样（草、光照、阴影）。串流到头显用 HEVC，尺寸跟随 VR 页里选的每眼渲染分辨率
+  （最大 2048×2208）；M4 上 1536×1656 时 Quest 3 显示约 70 帧，从输入到显示约 70 毫秒（2026-11-10 实测；之前固定的
+  2048×2208 H.264 是 53 帧、132 毫秒）。两只眼看到的是同一幅画面，所以**默认没有立体深度**。
+- **王国之泪的立体深度（实验性，默认关）**：游戏仍然每帧只运行一遍；图形层把这一帧按每只眼各回放一次，眼睛向两侧各移半个
+  瞳距，所以两只眼都是同一时刻的真实渲染。代价是帧率约减半（M4、2048×2208 下约 30 帧，单画面约 53 帧），VR 页里还没有开关。
+  王国之泪自己没有双眼渲染器；早先“把游戏的渲染任务跑两遍”的做法会弄坏画面（草消失、光照错误），已经删除。
+- **旷野之息 1.6.0 / 1.9.0**：用游戏自带的同帧双眼渲染器（Labo VR 模式的那一个），按头显的投影和瞳距画两只眼；设置和
+  限制见安装文档。
 
 一个脚本完成打包和安装，包括头显上的准备：[`zeldaVR/install.md`](zeldaVR/install.md)（代码在 [`zeldaVR`](zeldaVR)）。普通 App 里 VR 不会打开。
 
@@ -254,18 +307,33 @@ Switch 2 游戏在《王国之泪》同一套运行时上运行：它们的 Ampe
 > [!TIP]
 > **公共清单里的每个着色器，开玩之前就已经准备好。** Mac 上不用停下来现场编译，iPhone 和 iPad 上画面也不会缺东西。大家玩过的地方越多，所有人玩得越流畅。
 
-[公共着色器清单](docs/shader-list.md)现在有 **14,794 个着色器变体**（12,619 个着色器），来自 Mac、iPhone 和 iPad：只收打包自己做不出的状态，因为每次打包都会给每个着色器做好默认变体。每次打包都用玩家自己的游戏文件生成，所以清单里只有标识，不含任何游戏数据。参与不需要任何设置：
+[公共着色器清单](docs/shader-list.md)现在有 **18,238 个着色器变体**（14,725 个着色器），来自 Mac、iPhone 和 iPad：只收打包自己做不出的状态，因为每次打包都会给每个着色器做好默认变体。每次打包都用玩家自己的游戏文件生成，所以清单里只有标识，不含任何游戏数据。参与不需要任何设置：
 
 1. **照常玩。** 每次打包都会把游戏里每个着色器按默认绑定状态各备一份。游戏遇到默认那份用不了的状态，或者建了 App 清单里没有的渲染管线，才会记进 `shader-list-contribution.txt`；默认变体不记。
-2. **在 Mac 上，着色器和管线合计每攒够 100 条，它会在游戏启动前问你一次。** 点“发送”，GitHub 提交页面会打开，文件也会显示出来，拖进去就行。装了 GitHub 命令行工具（`gh`）并已登录时，对话框里会多一个“自动提交”，点了就直接替你把这一批发出去（私密 gist 加一个 issue），不用打开浏览器。iPhone 和 iPad 玩的时候从不提醒：设备连着打包它的那台 Mac（线连或同一 Wi‑Fi）时，由 Mac 来问。点“不要提醒了”以后就不再问。
+2. **着色器和管线合计攒够 100 条后，游戏在启动前问你一个问题**，Mac、iPhone、iPad 都一样。选“贡献着色器”，游戏会自己通过 HTTPS 把这些条目发到着色器收件箱（[mac-native-games.com](https://mac-native-games.com)）：启动后不久发一次，之后每半小时一次，不打扰游玩。选“不贡献”就什么都不发。随时可以在“设置”里的开关改。
 3. **下次大家打包的 App 都会带上。** 谁到那里都不会再卡顿。
 
-**[发送你的着色器 →](https://github.com/ly05010419/MacNativeGames/issues/new?template=shader-list.yml)** · 游戏不会自己上传任何东西。
+只发送着色器和管线的标识、游戏和 App 版本、设备型号和系统版本号，以及一个随机编号（Mac 上还有贡献榜用的随机编号和昵称），不含游戏内容、存档或个人信息。你选“贡献着色器”之前什么都不发。不需要手动提交任何东西：从 2026 年 11 月 12 日起不再通过 GitHub issue 收集贡献。
 
 **第一次进入游戏或新场景时，新着色器的编译可能造成卡顿，这是预期现象，不必惊讶。** 随着着色器缓存逐步预热，表现通常会改善；[公共清单](#让我们一起维护着色器清单游戏不再卡顿)每多一个着色器，就少一处卡顿。
 
 ## 更新说明
 
+- **2026-11-11：排行榜，匿名的帧率榜单（王国之泪、旷野之息、时之笛，Mac）。** 设置面板（按 1）里单独一个标签页显示最新榜单，
+  按锁帧和补帧设置分组。**我要上榜**默认关，不弹窗询问；打开后每 5 分钟在本机记一次这局的成绩，开机时和每 30 分钟上传；
+  你自己那一行是绿色，所有人都只显示匿名玩家名（[操作与设置](docs/controls.zh-CN.md)）。着色器贡献也改为开机时和每 30 分钟上传。
+- **2026-11-10：塞尔达传说 时之笛（Switch 2）登陆 Mac。** 用你自己导出的游戏（`.nup` 文件，或带更新 131072 的导出目录）
+  通过 `build_app.py` 打包，不需要 keys。在 M4 上从标题玩进科奇里森林和村子，720p 或 1080p（720p 放大）站在村子里约
+  81–83 fps；默认 720p。设置面板（按 1）里有分辨率、放大方式（MetalFX 或游戏自带）、锁帧和 MetalFX 补帧
+  （[games/oot](games/oot/README.md)、[安装](games/oot/docs/install.zh-CN.md)）。
+- **2026-11-09：异度神剑 X 2.0.0 的 Mac 诊断版，实验性。** 单独的完整性校验、累积更新合并、按版本打包；默认保持原版
+  30 FPS，可选的 60 / 120 帧时间实验还在等更多人验收（[详情](games/xcx/README.md#update-200-mac-diagnostic)）。
+- **2026-11-08：塞尔达传说 织梦岛 1.1.0 登陆 Mac，实验性。** 用你自己的游戏文件打包；在梅贝村一带手动玩过
+  （[games/la](games/la/README.md)）。
+- **2026-11-07：塞尔达无双 灾厄启示录除了 1.3.0，也能用 1.4.1 更新打包（Mac，实验性）。** 打包时从解包出的游戏目录
+  读取版本（[`games/aoc`](games/aoc/README.md)）。
+- **2026-11-03：王国之泪 1.4.3 在 Mac 上可选 SMAA 和 FXAA Quality。** 在效果页分别选择抗锯齿方式和质量；默认仍是
+  游戏原版的 FXAA（[操作与设置](docs/controls.zh-CN.md)）。
 - **2026-11-03：第一批 Switch 2 游戏，实验性。** 大金刚 Bananza 用开发构建可以在 Mac 上玩；宝可梦 Pokopia 能玩过开场
   进到第一个区域（脚本测试）。Pokopia 2.0.1 可以用你自己的转储目录打包成 Mac App：`python3 build_app.py <转储目录>
   --shared-fonts <王国之泪 / 旷野之息打包时提取的六个 .bfttf 字体>`（不需要 keys；[docs/ns2-port.md](docs/ns2-port.md)）。
@@ -281,6 +349,7 @@ Switch 2 游戏在《王国之泪》同一套运行时上运行：它们的 Ampe
 - [需要准备](docs/install.zh-CN.md#需要准备) · [打包 App](docs/install.zh-CN.md#打包-app) · [旷野之息](docs/install.zh-CN.md#旷野之息) · [iPhone 和 iPad](docs/install.zh-CN.md#iphone-和-ipad) · [Apple Vision Pro](docs/install.zh-CN.md#apple-vision-pro)
 - [操作](docs/controls.zh-CN.md) · [文件位置](docs/install.zh-CN.md#文件位置) · [已知问题](docs/install.zh-CN.md#已知问题)
 - [测试记录](docs/test-records.zh-CN.md)
+- 时之笛（Switch 2）：[games/oot/docs/install.zh-CN.md](games/oot/docs/install.zh-CN.md)
 - 红警 2 和尤里的复仇：[windows_games/ra2/install.zh-CN.md](windows_games/ra2/install.zh-CN.md)
 
 ## 工作原理
@@ -300,11 +369,22 @@ Switch 2 游戏在《王国之泪》同一套运行时上运行：它们的 Ampe
 - **Ryujinx**（MIT）：着色器翻译器（`vendor/ryujinx`，预编成 `games/totk/prebuilt/macos-arm64/totk_xlate`）和系统服务的参考；`games/totk/runtime` 里的音效和混音器移植自 Ryujinx.Audio。
 - **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)**（Apache-2.0）把 SPIR-V 转成 Metal 着色语言；打包时按固定提交取得，用 clang 编。
 - **[hactool](https://github.com/SciresM/hactool)**（ISC，自带的 mbedTLS 是 Apache-2.0）：打包时合并本体和更新包；按固定提交取得。
-- **deko3d**（zlib）：贴图布局尺寸。**[bcdec](https://github.com/iOrange/bcdec)**（MIT 或公有领域）：BC 贴图解码。**libopus**、**libvpx**（BSD，来自 Homebrew）：音频和预渲染影片。
+- **deko3d**（zlib）：贴图布局尺寸。**[bcdec](https://github.com/iOrange/bcdec)**（MIT 或公有领域）：BC 贴图解码。**libopus**、**libvpx**（BSD，打包时从固定版本的源码编出）：音频和预渲染影片。
 - **[x86recomp](https://github.com/JTM-rootstorm/x86recomp)**（MIT）是 Windows 游戏的重编译器和 Win32 运行时（`windows_games/ra2/third_party/x86recomp`，含我们的改动）；它用到 **Berkeley SoftFloat 3**（BSD-3-Clause）和 **CORE-MATH**（MIT），iOS 上还用到 **SDL3**（zlib）、**glslang**、**SPIRV-Cross** 和只带解码器的 **ffmpeg**（LGPL）。简体中文用 **[OpenCC](https://github.com/BYVoid/OpenCC)**（Apache-2.0）转换，补的字形取自 **[思源黑体 / Noto Sans CJK](https://github.com/notofonts/noto-cjk)**（SIL OFL 1.1）。
 - **[BasaltVR](https://github.com/frenchbaguetteman/BasaltVR)**（MIT）负责串流 VR 画面：`zeldaVR/install_vr.sh` 按固定提交取得它，再打上我们的改动（`zeldaVR/streamer/basaltvr.patch`）。头显上显示画面的是 **[ALVR](https://github.com/alvr-org/ALVR)** 客户端（MIT），从 ALVR 的发布页下载并核对 SHA-256。**[BotW-BetterVR](https://github.com/Crementif/BotW-BetterVR)**（MIT）、UEVR 和 R.E.A.L. 是镜头、第一人称和体感操作的参考，没有拷代码。
+- **时之笛**（`games/oot`，全部来源列在[它的 COPIES.md](games/oot/third_party/COPIES.md)）：NUP 读取用 **[nup](https://github.com/a55uka/nup)**（MIT）；AV1 影片解码改编自 **nxnative**，网格 / 任务着色器阶段、HMMA 矩阵运算的翻译和按类型的池数组改编自 **[ChiefSZ13/nxnative](https://github.com/ChiefSZ13/nxnative)**（MIT）；**dav1d**（BSD-2-Clause）随 App 带着，作 AV1 的后备解码；**zbic**（GPLv2）只作为独立的打包工具运行，不拷贝、不随 App 发布。Ampere 指令语义参考了 NVIDIA 的 CUDA Binary Utilities、PTX 文档和 Mesa 的 NAK，**[Lichii](https://github.com/zortos293/Lichii)**（GPL-3.0）只参考了字段含义，没有拷它的代码。
 - 带了别处代码的社区移植，在各自目录的 `third_party/COPIES.md` 里列出。主项目和 Windows 游戏拷进来的代码及各自的许可，列在 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 许可证
 
 MIT（见 [LICENSE](LICENSE)）。第三方代码保留各自的许可证：[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## Star History / Star 历史
+
+<a href="https://www.star-history.com/?repos=ly05010419%2FMacNativeGames&type=date&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ly05010419/MacNativeGames&type=date&theme=dark&legend=bottom-right" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=ly05010419/MacNativeGames&type=date&legend=bottom-right" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=ly05010419/MacNativeGames&type=date&legend=bottom-right" />
+ </picture>
+</a>

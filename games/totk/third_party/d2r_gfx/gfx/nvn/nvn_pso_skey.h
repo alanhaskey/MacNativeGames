@@ -15,6 +15,15 @@ typedef struct {
 #define PSO_VBORDER 16u
 // bit 5 (TOTK, PR #1129): HDR / EDR on for this draw; the fragment function is the shader's HDR twin (NvShader hdr_fn).
 #define PSO_HDR 32u
+/* A host-generated full-viewport vertex function (Labo's lens-free compositor).
+ * Separate cache identity from the original vertex-input pipeline. */
+#define PSO_HOST_RECT 64u
+#define PSO_HOST_OUTPUT 128u   /* Plain native SBS output; no Labo lens fragment. */
+/* The host bits: such a pipeline is built in play from a host function and never archived (pso_archive_key), so a listed
+   row is never one: a row with them comes from a runtime where the bits meant nothing (Ocarina of Time's list holds 69,
+   recorded 2026-11-09) or from a VR session. pso_skey_parse refuses it, as building it would ask for the VR host function
+   (2026-11-13, the shared layer's first OOT pipeline archive stopped with "Labo VR vertex function is unavailable"). */
+#define PSO_HOST_BITS (PSO_HOST_RECT | PSO_HOST_OUTPUT)
 
 typedef struct {
     uint8_t kind, fbmask;
@@ -65,6 +74,7 @@ static inline int pso_skey_parse(const char *hex, pso_skey *out) {
         if (a < 0 || b < 0) return -1;
         p[i / 2] = (uint8_t)(a << 4 | b);
     }
+    if (out->k.a2c & PSO_HOST_BITS) return -1;   // never a listed pipeline (PSO_HOST_BITS)
     pso_key_norm(&out->k, out->merged);   // also rows recorded before keys were made so
     return 0;
 }

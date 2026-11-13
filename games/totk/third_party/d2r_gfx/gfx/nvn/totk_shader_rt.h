@@ -14,7 +14,9 @@ NSSet<NSString *> *totk_rt_observed_shader_keys(void);
 // The warm-up scope: this game version's shader keys (the seed's shader-keys.json) plus the observed ones; nil = no valid
 // scope, on iOS, or TOTK_WARM_ALL=1 (warm the whole cache).
 NSSet<NSString *> *totk_rt_shader_scope(void);
-void totk_rt_note_set(NSString *shader);   // a shader the game set that the seed lacks: into the contribution file
+void totk_rt_note_set(NSString *shader);
+// Diagnostic (TOTK_SHADER_DUMP_UNSEEDED=<folder>): a set shader outside the seed's game-shader-keys.json, its bytes once.
+void totk_rt_dump_unseeded(const uint8_t *control, const void *code, uint32_t length, NSString *key);   // a shader the game set that the seed lacks: into the contribution file
 // The variants of a shader already in the translation cache (or the seed), without translating anything; empty when none.
 NSArray<NSString *> *totk_rt_known_variants(NSString *shader);
 // Returns the variant name whose <dir>/<variant>_b.{metal,json} match the answers, translating when needed.
@@ -31,6 +33,9 @@ void totk_rt_service_prestart(void);   // start the submit thread's translator s
 void totk_rt_set_ready_hook(void (*hook)(NSString *variant, int stage));
 // The variant totk_rt_variant would return when the cache index already names one; nil otherwise (never translates).
 NSString *totk_rt_variant_cached(NSString *shader, NSDictionary *answers);
+/* Seed runs (TOTK_SEED_VERIFY=1): the variants checked against this runtime's requests or made in the run, and how many
+   cached ones were kept and made again (totk_shader_rt.m seed_verified). */
+NSArray<NSString *> *totk_rt_seed_verified(uint64_t *kept, uint64_t *dropped);
 void totk_rt_variant_broken(NSString *key);   // shader_load found it unusable: translated again at its next use
 NSString *totk_rt_portable_variant(NSString *name);   // "<variant>_b" as another player's build names it (pipeline contributions)
 int totk_rt_contrib_on(void);                       // a contribution file is kept (TOTK_SHADER_CONTRIB set, seed on)

@@ -51,7 +51,7 @@ def card_image(folder):
     return xci
 
 
-def run_main(case, folder, base, update=None, dlcs=(), game='botw', stop='step_code_botw', fonts=True, version='botw190', card='botw160'):
+def run_main(case, folder, base, update=None, dlcs=(), game='botw', stop='step_code_botw', fonts=True, version='botw190', card='botw160', extra=()):
     """build_app.main with the long steps mocked: it stops at `stop` (Stop) or at the first BuildError, which it returns
     with the started mocks. fonts=False leaves out --firmware; version is what the update is identified as."""
     keys = folder / 'prod.keys'
@@ -63,6 +63,7 @@ def run_main(case, folder, base, update=None, dlcs=(), game='botw', stop='step_c
         argv += ['--update', str(update)]
     for dlc in dlcs:
         argv += ['--dlc', str(dlc)]
+    argv += [str(a) for a in extra]
 
     def prepare_work(work, py, logs):
         work.mkdir(parents=True, exist_ok=True)
@@ -93,7 +94,9 @@ class GameSelectionTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        self.root = Path(self._tmp.name)
+        # the game files one folder down, so the default work folder (beside the folder of the app) stays in here
+        self.root = Path(self._tmp.name) / 'games'
+        self.root.mkdir()
 
     def test_ticket_title_ids_and_kinds(self):
         for title_id in (BOTW_BASE, BOTW_UPDATE, BOTW_DLC):
@@ -189,7 +192,8 @@ class GameSelectionTests(unittest.TestCase):
         error, started = self.run_main(self.card_image())
         self.assertIsInstance(error, Stop)
         self.assertEqual(started['step_code_botw'].call_args.kwargs['version'], 'botw160')
-        self.assertEqual(started['prepare_work'].call_args[0][0], self.root.resolve() / 'BotW_build')
+        # without --work: build_app.default_work, MacNativeGames-work/botw beside the folder of the app (one rule with MNG Launcher)
+        self.assertEqual(started['prepare_work'].call_args[0][0], build_app.default_work(self.root.resolve() / 'Breath of the Wild.app', 'botw')[0])
 
     def test_botw_card_image_with_the_1_9_0_update_is_1_9_0(self):
         # a card image that holds the 1.9.0 update has the same base + update + add-on-content structure:
@@ -209,6 +213,41 @@ class GameSelectionTests(unittest.TestCase):
         self.assertEqual(started['step_code_botw'].call_args[0][2], update.resolve())
         self.assertEqual(started['step_code_botw'].call_args.kwargs['version'], 'botw190')
 
+    def mod_folder(self, *halves):
+        mod = self.root / 'Mod'
+        for half in halves:
+            (mod / half).mkdir(parents=True, exist_ok=True)
+        return mod
+
+    def test_botw190_takes_a_mod_with_code_patches(self):
+        base, update = package(self.root, 'botw.nsp', BOTW_BASE), package(self.root, 'botw-u.nsp', BOTW_UPDATE)
+        mod = self.mod_folder('exefs', 'romfs')
+        error, started = run_main(self, self.root, base, update, extra=['--mod', mod])
+        self.assertIsInstance(error, Stop)
+        self.assertEqual(started['step_code_botw'].call_args.kwargs['mod'], mod.resolve())
+
+    def test_botw190_data_only_mod_has_no_code_to_merge(self):
+        base, update = package(self.root, 'botw.nsp', BOTW_BASE), package(self.root, 'botw-u.nsp', BOTW_UPDATE)
+        error, started = run_main(self, self.root, base, update, extra=['--mod', self.mod_folder('romfs')])
+        self.assertIsInstance(error, Stop)
+        self.assertIsNone(started['step_code_botw'].call_args.kwargs['mod'])
+
+    def test_botw160_takes_a_mod_with_code_patches(self):
+        mod = self.mod_folder('exefs')
+        error, started = self.run_main_with(self.card_image(), extra=['--mod', mod])
+        self.assertIsInstance(error, Stop)
+        self.assertEqual(started['step_code_botw'].call_args.kwargs['version'], 'botw160')
+        self.assertEqual(started['step_code_botw'].call_args.kwargs['mod'], mod.resolve())
+
+    def test_botw_install_mod_romfs_is_not_wired(self):
+        base, update = package(self.root, 'botw.nsp', BOTW_BASE), package(self.root, 'botw-u.nsp', BOTW_UPDATE)
+        error, started = run_main(self, self.root, base, update, extra=['--mod', self.mod_folder('exefs', 'romfs'), '--install-mod-romfs'])
+        self.assertIn('--install-mod-romfs is only wired for Tears of the Kingdom', str(error))
+        started['step_code_botw'].assert_not_called()
+
+    def run_main_with(self, base, **kwargs):
+        return run_main(self, self.root, base, **kwargs)
+
     def test_botw_files_on_the_wrong_flag_stop_before_any_step(self):
         base, update = package(self.root, 'botw.nsp', BOTW_BASE), package(self.root, 'botw-u.nsp', BOTW_UPDATE)
         error, started = self.run_main(update, base)
@@ -218,9 +257,9 @@ class GameSelectionTests(unittest.TestCase):
         started['step_code_botw'].assert_not_called()
 
     def test_botw_build_fonts_serve_botw_only(self):
-        # valid fonts in BotW_build next to the game file pass the early NSP font check; a TOTK NSP stops right after
-        # identify_game, before any long step, as without them
-        botw_fonts = lambda folder: 'BotW_build' in str(folder)
+        # valid fonts in Breath of the Wild's default work folder pass the early NSP font check; a TOTK NSP stops right
+        # after identify_game, before any long step, as without them
+        botw_fonts = lambda folder: 'MacNativeGames-work/botw' in str(folder)
         with mock.patch.object(build_app, 'fonts_valid', side_effect=botw_fonts):
             base, update = package(self.root, 'botw.nsp', BOTW_BASE), package(self.root, 'botw-u.nsp', BOTW_UPDATE)
             error, started = self.run_main(base, update, fonts=False)
@@ -229,12 +268,19 @@ class GameSelectionTests(unittest.TestCase):
             self.assertIn('NSP files do not include system shared fonts', str(error))
             started['step_code'].assert_not_called()
 
+    def test_totk_route_still_takes_a_mod(self):
+        mod = self.mod_folder('exefs')
+        error, started = run_main(self, self.root, package(self.root, 'totk.nsp', TOTK_BASE), game='totk', extra=['--mod', mod])
+        self.assertIsInstance(error, Stop)
+        self.assertEqual(started['step_code'].call_args.kwargs['mod'], mod.resolve())
+        started['step_code_botw'].assert_not_called()
+
     def test_totk_route_is_unchanged(self):
         error, started = self.run_main(package(self.root, 'totk.nsp', TOTK_BASE), game='totk')
         self.assertIsInstance(error, Stop)
         started['step_code'].assert_called_once()
         started['step_code_botw'].assert_not_called()
-        self.assertEqual(started['prepare_work'].call_args[0][0], self.root.resolve() / 'TOTK_build')
+        self.assertEqual(started['prepare_work'].call_args[0][0], build_app.default_work(self.root.resolve() / 'Tears of the Kingdom.app', 'totk')[0])
 
 
 if __name__ == '__main__':

@@ -1,7 +1,35 @@
 /* Exercise the real AppKit menu and window-close handler without game data. */
+#import <CoreGraphics/CoreGraphics.h>
+#define TOTK_SCREENSHOT_WINDOW 1   /* frontend.m's capture button, tested below */
+#define TOTK_SCREENSHOT_WRITE 0    /* no ImageIO in this build: the write below is the probe's own */
+#define TOTK_SCREENSHOT_SAVE screenshot_picture_save
+static void screenshot_picture(void (^cb)(CGImageRef img));   /* the renderer's frame: this probe's small image */
+#define TOTK_SCREENSHOT_PICTURE screenshot_picture
 #include "../../runtime/frontend.m"
 #include <time.h>
 
+/* The renderer's next frame, for screenshot.h: this probe has none, so each request is a small image of its own (one per
+   press), handed over the way the renderer hands a frame over -- when it has one; the write says it saved the picture. */
+static int screenshotsTaken, screenshotsSaved, deferPictures;
+static NSMutableArray *deferredPictures;
+static void screenshot_picture(void (^cb)(CGImageRef img)) {
+    screenshotsTaken++;
+    if (deferPictures) { if (!deferredPictures) deferredPictures = [NSMutableArray array]; [deferredPictures addObject:[cb copy]]; return; }
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(NULL, 8, 8, 8, 32, space, (uint32_t)kCGImageAlphaPremultipliedLast);
+    CGImageRef image = context ? CGBitmapContextCreateImage(context) : NULL;
+    if (context) CGContextRelease(context);
+    CGColorSpaceRelease(space);
+    cb(image);
+    if (image) CGImageRelease(image);   /* the save kept its own, as with the renderer's */
+}
+static int screenshot_picture_save(CGImageRef img, const char *game, char *path, size_t size, const char **why, int *problem,
+                           char *album, size_t album_size) {
+    (void)img; (void)game; (void)why; (void)problem; (void)album; (void)album_size;
+    screenshotsSaved++;
+    snprintf(path, size, "/tmp/probe-%d.png", screenshotsTaken);
+    return 1;
+}
 static int mode;
 static uint64_t start;
 static uint64_t clock_ns(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (uint64_t)t.tv_sec*1000000000ull+t.tv_nsec;}
@@ -29,6 +57,8 @@ int runtime_gamepad_settings_requested(void){return 0;}
 #ifndef FRONTEND_REAL_GAMEPAD
 int runtime_gamepad_settings_button(void){return -1;}
 void runtime_gamepad_settings_button_set(int physical){(void)physical;}
+int runtime_gamepad_screenshot_button(void){return CONTROLLER_SCREENSHOT_DEFAULT;}
+void runtime_gamepad_screenshot_button_set(int physical){(void)physical;}
 #endif
 #ifndef FRONTEND_REAL_GAMEPAD
 static int textCaptureFixture;
@@ -82,6 +112,9 @@ int vr_hide_head_mode(void){return -1;}void vr_set_hide_head_mode(int m){(void)m
 void runtime_mouse_set_hook(void (*hook)(void)){(void)hook;}
 #endif
 #ifndef FRONTEND_REAL_GAMEPAD
+void runtime_capture_set_hook(void (*hook)(void)){(void)hook;}
+#endif
+#ifndef FRONTEND_REAL_GAMEPAD
 void runtime_mouse_move(double dx,double dy){(void)dx;(void)dy;}
 #endif
 #ifndef FRONTEND_REAL_GAMEPAD
@@ -121,10 +154,16 @@ void runtime_aspect_view(double w,double h){(void)w;(void)h;}
 int taa_enabled(void){return 0;}
 /* The settings panel (runtime/settings_panel.h) is not opened here. */
 void taa_set(int on){(void)on;}
+int taa_fast_enabled(void){return 0;}   /* edge smoothing's fast resolve (totk_taa.m) */
+void taa_set_fast(int on){(void)on;}
 int mfx_requested(void){return 0;}
 int fps_overlay_hud_mode(void){return 1;}
 void dm_gfx_set_flag(const char *name,int value){(void)name;(void)value;}
 void dm_gfx_aniso_start(int n){(void)n;} int dm_gfx_aniso_locked(void){return 0;} int dm_gfx_aniso(void){return 0;} void dm_gfx_aniso_set(int n){(void)n;}   /* the display page's anisotropy row (nvn_mtl.m) */
+void dm_gfx_keepalive_start(int on){(void)on;} int dm_gfx_keepalive_locked(void){return 0;} int dm_gfx_keepalive(void){return 1;} void dm_gfx_keepalive_set(int on){(void)on;}   /* the display page's GPU keep-alive row (nvn_mtl.m, PR #2049) */
+/* the leaderboard (board_upload.h): the graphics layer's frame record and picture settings, none here */
+void fps_board_start(void){} void fps_board_reset(void){} int fps_board_counting(void){return 0;} int fps_board_snapshot(fps_board_stats *s){(void)s;return 0;}
+void mtl_board_view(int *ow,int *oh,int *sw,int *sh,int *mfx){*ow=*oh=*sw=*sh=*mfx=0;} void nvn_board_pacing(int *lock,int *interp){*lock=*interp=0;} int mtl_display_hz(void){return 0;}
 int runtime_output_modes(void){return 0;}
 int runtime_output_mode(void){return 0;}
 int runtime_output_mode_set(int mode){(void)mode;return 0;}
@@ -164,6 +203,7 @@ int runtime_triggers_locked(void){return 0;}
 int runtime_triggers_choice(void){return 0;}
 void runtime_triggers_choose(int on){(void)on;}
 void runtime_triggers_release(void){fprintf(stderr,"[probe] triggers released\n");}   /* the window's close lets the DualSense go */
+void runtime_cloud_save_quit(void){}   /* the window's close uploads a save not in the sync folder yet (runtime/cloud_save.m) */
 int fps_overlay_value(void){return 0;}   /* the HUD's FPS graph (PR #940) */
 
 static NSEvent *key(NSEventModifierFlags flags){
@@ -221,6 +261,30 @@ static void probe_command_input(void){
  }
  puts("PASS: Command input isolation, existing menu equivalents, held keys and ordinary modifiers");
 }
+static void screenshot_pump(double seconds) {
+ [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:seconds]];
+ if (shotWrites) dispatch_sync(shotWrites,^{});
+}
+static void probe_screenshot_generations(void) {
+ start=clock_ns(); deferPictures=1;
+ bootOverlay=[[NSView alloc] initWithFrame:window.contentView.bounds];bootOverlay.hidden=YES;
+ screenshot_take(); uint64_t first=shotRequest;
+ void (^old)(CGImageRef)=deferredPictures[0];
+ screenshot_pump(3.1);
+ if(shotPendingRequest)runtime_fail("screenshot timeout did not invalidate its request");
+ old(NULL);screenshot_pump(.05);
+ if(screenshotsSaved)runtime_fail("a late frame was saved after its request expired");
+ screenshot_take();uint64_t second=shotRequest;
+ void (^current)(CGImageRef)=deferredPictures[1];current(NULL);screenshot_pump(.05);
+ if(screenshotsSaved!=1||second<=first)runtime_fail("second screenshot did not complete with a fresh generation");
+ screenshot_take();uint64_t third=shotRequest;
+ if(third<=second)runtime_fail("screenshot generation was reused after completion");
+ current(NULL);screenshot_pump(.05);
+ if(screenshotsSaved!=1||shotPendingRequest!=third)runtime_fail("an old callback stole a newer screenshot");
+ void (^latest)(CGImageRef)=deferredPictures[2];latest(NULL);screenshot_pump(.05);
+ if(screenshotsSaved!=2||shotPendingRequest)runtime_fail("latest screenshot did not finish independently");
+ puts("PASS: screenshot expiry, late callbacks and nonreused generations");
+}
 int main(int argc,char **argv){
  @autoreleasepool{
   if(argc!=3)return 1;
@@ -235,6 +299,7 @@ int main(int argc,char **argv){
   front_install_menu();
   [NSApp finishLaunching];
   if(mode==4){probe_command_input();return 0;}
+  if(mode==5){probe_screenshot_generations();return 0;}
   if(atoi(argv[2])){
    NSTextField *field=[[NSTextField alloc] initWithFrame:NSMakeRect(10,10,200,25)];
    [window.contentView addSubview:field];[window makeFirstResponder:field];
@@ -258,6 +323,14 @@ int main(int argc,char **argv){
   }
   if([NSApp.mainMenu performKeyEquivalent:key(0)])runtime_fail("plain Q triggered Quit");
   if([NSApp.mainMenu performKeyEquivalent:key(NSEventModifierFlagControl)])runtime_fail("Control-Q triggered Quit");
+  /* The capture button (screenshot.h): nothing while the game shows no picture, exactly one picture once it does. */
+  if(!bootOverlay){bootOverlay=[[NSView alloc] initWithFrame:window.contentView.bounds];[window.contentView addSubview:bootOverlay];}
+  bootOverlay.hidden=NO;
+  screenshot_request();[NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+  if(screenshotsTaken!=0)runtime_fail("a screenshot was taken before the game showed a picture");
+  bootOverlay.hidden=YES;
+  screenshot_request();[NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+  if(screenshotsTaken!=1)runtime_fail("the capture button did not take exactly one screenshot");
   dispatch_async(dispatch_get_main_queue(),^{
    start=clock_ns();
    if(![NSApp.mainMenu performKeyEquivalent:key(NSEventModifierFlagCommand)])runtime_fail("Command-Q was not handled");

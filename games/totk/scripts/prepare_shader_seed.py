@@ -144,32 +144,39 @@ def record_verified(output, files):
 
 
 def reusable_seed(output, identity, min_shaders=MIN_SHADERS):
-    """Return a verified seed manifest, or None when it must be prepared again."""
+    """Return a verified seed manifest, or None when it must be prepared again; the reason is printed (2026-11-11: a
+    whole seed prepared again said nothing about why)."""
+    def again(why):
+        print(f'the startup seed is prepared again: {why}', flush=True)
+        return None
     marker = output/'seed-manifest.json'
     if not marker.is_file():
-        return None
+        return again('there is none in this work folder')
     try:
         old = json.loads(marker.read_text())
         files = old.get('files', {})
         # Older seeds lack the complete raw-key inventory. Their successful translation rows are not a substitute.
         if not isinstance(files, dict) or 'shader-keys.json' not in files:
-            return None
-        if not all(old.get(k) == v for k, v in identity.items()) or old.get('shaders', 0) < min_shaders:
-            return None
+            return again('the seed there is of an older format')
+        changed = sorted(k for k, v in identity.items() if old.get(k) != v)
+        if changed:
+            return again('it was made with another ' + ', '.join(changed))
+        if old.get('shaders', 0) < min_shaders:
+            return again(f'it holds {old.get("shaders", 0)} shaders, fewer than {min_shaders}')
         known = verified_digests(output)
         if not all((output/name).is_file() and (known.get(name) or digest((output/name).read_bytes())) == sha
                    for name, sha in files.items()):
-            return None
+            return again('a file of it is missing or changed')
         record_verified(output, files)
         scope = json.loads((output/'shader-keys.json').read_text())
         if scope.get('schema') != 1 or scope.get('version') != identity['version'] or \
                 scope.get('source_romfs_sha256') != identity['source_romfs_sha256']:
-            return None
+            return again('its shader key list is of another version or game data')
         if shader_key_scope(scope['keys'], scope['version'], scope['source_romfs_sha256'], chain=scope.get('chain')) != scope:
-            return None
+            return again('its shader key list does not match its keys')
         return old
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        return None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        return again(f'its manifest cannot be read ({type(e).__name__})')
 
 
 # Two caches beside the seed folder (<output>.inventory, <output>.translations), so a packaging whose shared list grew
@@ -224,7 +231,7 @@ def translations_folder(beside, identity):
 
 def cached_inventory(romfs, modules, game, folder, identity):
     """inventory(), kept in <folder>: inventory.json names the identity it was read with (the RomFS, the game modules,
-    this script), each shader's stage, source and the offsets of its control and code in shaders.bin, and the SHA-256
+    INVENTORY_SHA256), each shader's stage, source and the offsets of its control and code in shaders.bin, and the SHA-256
     of shaders.bin. Any difference reads the RomFS again."""
     try:
         saved = json.loads((folder/'inventory.json').read_text())
@@ -266,10 +273,17 @@ class TranslationCache:
     def __init__(self, folder, identity, shared=False):
         self.folder, self.shared = folder, shared   # shared (translations_folder): other work folders' entries stay
         try:
-            same = json.loads((folder/'cache.json').read_text()) == identity
+            old = json.loads((folder/'cache.json').read_text())
+        except FileNotFoundError:
+            old = None
         except (OSError, ValueError):
-            same = False
-        if not same:
+            old = {}
+        same = old == identity
+        if not same:   # said in the log, so a full translation is never left unexplained (2026-11-11)
+            print('translation cache: ' + ('none in this work folder yet' if old is None else
+                  'emptied, it was made with another ' + ', '.join(sorted(k for k in set(old) | set(identity)
+                                                                          if old.get(k) != identity.get(k)))
+                  if isinstance(old, dict) and old else 'emptied, its cache.json cannot be read'), flush=True)
             shutil.rmtree(folder, ignore_errors=True)
             folder.mkdir(parents=True)
             (folder/'cache.json').write_text(json.dumps(identity))
@@ -600,6 +614,23 @@ def inventory(romfs, modules=None, game='totk'):
     return index, shaders, startup, archives
 
 
+# What the shader inventory (cached_inventory: its file format, inventory() and everything inventory() calls here) is
+# read with, besides the RomFS and the modules. tests/test_shader_inventory_key.py checks this list against the calls.
+INVENTORY_CODE = ('cached_inventory', 'inventory', 'decoder', 'startup_package', 'bnsh_shaders', 'sharcb_shaders',
+                  'bound_control', 'control_key_len', 'sarc', 'yaz0', 'checked', 'digest')
+
+
+def inventory_sha256():
+    """The source of INVENTORY_CODE and the constants it reads (the containers' magic numbers, each game's shader
+    folders); not each game's list path, which names where the repo is."""
+    constants = dict(ZSTD=ZSTD.hex(), YAZ0=YAZ0.hex(), folders={game: GAMES[game]['folders'] for game in sorted(GAMES)})
+    return digest((''.join(inspect.getsource(globals()[name]) for name in INVENTORY_CODE) +
+                   json.dumps(constants, sort_keys=True)).encode())
+
+
+INVENTORY_SHA256 = inventory_sha256()   # once, at import: the code as it was loaded, whatever replaces a function later
+
+
 def located(locators, read, game='totk'):
     """Shaders the shared list locates outside BNSH files (agl .sharcb, the game module), read where it says and kept
     only when control and code hash to the listed key (another game version's bytes never are). read(source) -> bytes."""
@@ -727,9 +758,11 @@ def prepare(romfs, output, translator, spirv_cross, version, shader_list=None, m
         output.rename(staging)
     staging.mkdir(parents=True, exist_ok=True)
     (staging/'seed-manifest.json').unlink(missing_ok=True)
-    scanned =dict(schema=INVENTORY_SCHEMA, game=game, source_romfs_sha256=identity['source_romfs_sha256'],
+    # The inventory is keyed by the code that reads it (INVENTORY_SHA256), not by this whole script as the seed is: keyed
+    # so, any edit here, a comment too, read the whole RomFS again (49 s). The translations are keyed alike (request_sha256).
+    scanned = dict(schema=INVENTORY_SCHEMA, game=game, source_romfs_sha256=identity['source_romfs_sha256'],
                    modules={p.name: digest(p.read_bytes()) for p in sorted(Path(modules).glob('*.patched.bin'))} if modules else {},
-                   preparation_sha256=identity['preparation_sha256'])
+                   inventory_sha256=INVENTORY_SHA256)
     _, shaders, startup, archives = cached_inventory(romfs, modules, game, output.with_name(output.name+'.inventory'), scanned)
     translations = dict(schema=TRANSLATIONS_SCHEMA, chain=CHAIN, translator_sha256=identity['translator_sha256'],
                         spirv_cross_sha256=identity['spirv_cross_sha256'],

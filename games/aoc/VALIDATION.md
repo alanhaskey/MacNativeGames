@@ -1,5 +1,108 @@
 # Age of Calamity validation — 2026-10-27
 
+## Settings panel on key 1 and on-demand activity — 2026-11-08
+
+Key 1 opens and closes the settings panel. The number keys 2 to 7 are no longer shortcuts, and the hints box with its
+switch and `hints=` key is gone. The stats pane shows on-demand library loads and pipeline build attempts and turns yellow
+after them. `DM_AOC_STATS` / `DM_AOC_FRAME_GRAPH` lock their rows without overwriting the saved choice. Checked without
+the game:
+
+- The native settings test passes 122 checks in both language overrides (71 before). It adds key 1 routing on the game
+  window and on the panel (first press, repeats, release, Command), released keys around the panel, the precedence
+  rules and locked rows, the activity colour rule with injected times and in the pane, and the absence of the hints box.
+- `controller-layout.txt` through the real file, with the loading and saving `front_mac.m` uses
+  (`front_settings_file.h`): a player's file with stats Full, the graph off and the old `hints=1`; a run where
+  `DM_AOC_STATS=1` and `DM_AOC_FRAME_GRAPH=1` decide; another setting changed and saved. The file keeps `stats=2` and
+  `frame_graph=0`, writes the change and drops `hints=`, and a run without the variables reads Full and off back.
+- Negative controls: with the lock check removed from `dm_pref_set` and a repeated 1 allowed to close the panel, four
+  checks fail; with the run's values saved instead of the saved choices, three file checks fail.
+- `make test` passes. `front_mac.m` and `front_settings.m` pass a syntax-only compile with no new warning.
+
+Checked in the game through internal events and logged state, on an instrumented app: a signed 1.4.1 app built from this
+change plus test-only DM_CTL hooks, which are not part of it. `mackey` posts a key event into the process's own queue, to
+the key window, so it goes through the local key monitor and the window's `keyDown:` like a typed key. `macstate` only
+reads and logs the panel, the keyboard and the stats pane's colour as the view holds it. `macset` makes a change as a panel
+control does. The hooks' sources were kept, and the app's host has the same code and strings as the one built from them. The hook read
+its down / up / repeat word inside the queued block, from a reusable buffer; every logged key event matches the command
+sent, in order (13 of 13 and 2 of 2), so the evidence stands, and a fixed hook is kept for any later test app.
+Two scripted sessions on a disposable profile copy:
+
+- With `DM_AOC_STATS=1` and `DM_AOC_FRAME_GRAPH=1`, over a file holding `stats=2`, `frame_graph=0` and the old `hints=1`:
+  - stats 1 and graph 1, both locked, both rows greyed;
+  - 1 on the game window opened the panel and made it the key window; its repeats and release on the panel left it
+    open; 1 on the panel closed it; the release then reaching the game window left the keyboard untouched;
+  - W held, then 1: W was released as the panel opened, its release on the panel and the closing 1 left nothing held;
+  - F1 opened the panel and Esc closed it;
+  - Swap A / B changed and saved, and changes to the locked stats and graph refused. The file kept `stats=2` and
+    `frame_graph=0`, wrote `swap_ab=1` and dropped `hints=`;
+  - polled once a second from the title into the map: yellow whenever the on-demand counts had risen in the last
+    three seconds (pipeline build attempts 128 to 167 entering the map, library loads 140 to 158), green when they
+    stayed still. One sample read green just after a rise, because the pane recolours on its own half-second timer.
+- With no variables, on the file that session saved: stats 2 and graph 0, rows enabled, `swap_ab=1` kept; a stats change
+  was accepted and written.
+
+The sessions logged one `texture type mismatch` line, a kind seen before, and no crash. Both were ended on purpose
+(the supervisor's code 5 for an aborted route), and both closed in order.
+
+Added after those sessions, checked without the game (the settings test passes 137 checks; `make test` passes; the changed
+host and graphics sources compile with no new warning): the graph shows frames per second from 0 to 60 instead of frame
+times, and the panel and the stats pane show the game's picture size (the scene target the `feedback_snap` draws read,
+1440x810 in the earlier logs) and output size (the presented texture) as last observed, with the window size: within one
+second shown as is, older as "last seen N s ago", never observed as --. The test drives those states, a size change
+included. The size cap row is renamed "Window size
+cap" and says it does not change the game's resolution.
+
+The clean-app session of 2026-11-08 (no hooks; see the pipeline warm-up list below) logged the sizes the readout uses as observed by the host: the scene
+target the `feedback_snap` draws read at 1440x810, and the window initialised at 1920x1080 (the presented size itself is
+not logged). The panel's text, the stats pane and the FPS graph were not seen: this session has no screen access, so
+they remain without visual check.
+
+Not validated: key 1 and the panel on the clean app (that session sent no keys; this session can post no system
+events), keys typed on a physical keyboard, and how the panel, the stats pane and the graph look on screen (no screen
+capture). This is not a visual acceptance, and the panel was not used in battle.
+
+
+## DLC on 1.4.1 — 2026-11-07
+
+The four add-ons were extracted and pinned: 1 is a marker file, 2 and 3 hold archives,
+and 4 also holds 26 movies. None holds a shader container, so the 40,729 shaders came
+from the cache. Before the mount fix the log showed one `aoc` mount and the game read
+the first DLC's `DLCDATA.dat` four times, so only the preorder bonus arrived.
+
+A signed app was built from this change with the four DLC inside and ran one scripted
+session from the save to the map. The host reported indices 1 to 4, the game mounted
+each one, then `aoc001` to `aoc003`, and read their files. The log carries one
+`texture type mismatch` line, a kind already seen without the DLC.
+
+A second app, this change together with the cutscene and black square changes, was
+played by hand: the bonus items arrived and the game's DLC section showed the content
+as active. A scripted session on that app showed EX Royal Ancient Lab on the map. No
+DLC mission or DLC movie has been played, and owning only some of the DLC has not been
+tried. 1.3.0 was not built: the builder rejects `--dlc` for it.
+
+## Update 1.4.1 (v458752) — 2026-11-07
+
+The patches were mapped by matching the code that reads each location and checked
+by disassembly: the sound heap cuts sit 0x630 further on, and the four timing stubs
+keep their instructions except the scene site, which reads the frame-rate block at
+its new offset. subsdk0 and sdk are the same builds as 1.3.0; only main differs.
+
+A signed app was built from an extracted 1.4.1 directory with 40,729 shaders and
+played by hand through the first missions, with audio, at 60 fps. The save carried
+across launches. This is a gameplay observation, not whole-game acceptance. The DLC
+is not covered.
+
+Signed apps of both versions were then built from this change in a new work folder.
+1.3.0's rewritten main, subsdk0 and sdk are byte-identical to those of the app built
+before it. Each app ran one scripted session of about 235 seconds at a 60 fps target,
+from the save through the map into Road to the Ancient Lab, with a median frame of
+16.6 to 17.0 ms at the end. Both logs carry the same seven `texture type mismatch`
+lines. The 1.3.0 session used a copy of a 1.4.1 save, and 1.3.0 has not been played by
+hand with this change.
+
+Known on 1.4.1 at this point: at a 60 fps target cutscenes run fast, the limitation
+already recorded for 1.3.0, and black squares appear in menus, cutscenes and play.
+
 ## Keyboard shortcut follow-up — 2026-10-27
 
 The game-window number shortcuts now include 2 (Original 30 → 60 → 120),
@@ -138,7 +241,7 @@ save/reload, final packaging and performance acceptance remain open.**
 - Foundation: nxnative `7861e7c1a9913e020600b1cc7f65132427e9cc50` through the pinned
   Jamboree copy. Copy and target profile manifests in `third_party/`.
 - Hardware: Apple M5, arm64, 16 GiB RAM, 10 CPU cores; macOS 27.0.1 (26A434).
-- External workspace: `/Users/jansantiago/MacNativeGames-work/aoc-1.3.0`.
+- External workspace: `<work folder>/aoc-1.3.0`.
   GPU probes: sibling `aoc-probes`; settings tests: sibling `aoc-settings`.
 - Xcode-selected SDK/Metal compiler: macOS 27.0, Metal 32023.921. .NET SDK
   10.0.403 installed privately under WORK/dependencies/dotnet from Microsoft's
@@ -150,7 +253,7 @@ save/reload, final packaging and performance acceptance remain open.**
 
 ## Input verification — passed for extracted-file scope
 
-Supplied root: `/Users/jansantiago/Downloads/RYUJINX/GameRoms/_Files AOC`.
+Supplied root: `<the game files folder>`.
 No original file was changed. The key file was neither read nor copied: these
 steps need no keys, containers or LibHac. Separate APFS clones are in
 `WORK/build/extract/v327680`.
@@ -224,6 +327,44 @@ four additional requested shader keys were missing as it advanced. It is not
 complete title/movie rendering acceptance. The full build and diagnostics
 overlap, so these windows are not benchmarks.
 
+## Black squares — 2026-11-07
+
+Game 1.4.1. `DM_NVN_MAGSCAN` found non-finite pixels first in the scene target
+(RG11B10Float, 1440x810), in the pass opened by full-screen stencil draws of
+`b7925c00a295bfdb` and `f0fdd965f01181da`, which sample the target they draw to. A
+720x405 chain spreads them into large patches in menus and cutscenes. They are read
+as NaN because each affected block's maximum stayed finite; the scan does not tell
+NaN from infinity. The mechanism is the same-pass feedback documented at `fb_prepare`
+in `nvn_mtl.m`.
+
+| Session, all with the original translator | Frames scanned | With non-finite pixels |
+|---|---|---|
+| Copies on, a full mission by hand (31.1 minutes) | 9,360 | 0 |
+| Copies on, scripted | 1,320 | 0 |
+| Copies off (`DM_NVN_FB_SNAP=0`), scripted | 1,320 | 525 (210 of 420 in play) |
+
+The scripted sessions use one host and one save copy, enter the same mission through
+`control.txt` and differ only in that switch. **User-confirmed:** by hand, the squares
+came back without copies and did not appear with them.
+
+GPU time, from `@gpu_ms` in `frames.tsv`, frames 9000 to 12999 of each session, 60 fps
+target, the same scripted route (enemies do not repeat exactly):
+
+| Pair | Mean with / without (ms) | p95 with / without (ms) |
+|---|---|---|
+| 1 | 6.33 / 6.00 | 8.95 / 8.38 |
+| 2 | 6.35 / 5.75 | 9.13 / 8.32 |
+| 3, scan running | 5.53 / 5.38 | 9.57 / 9.30 |
+
+Without the scan, the copies added 0.33 and 0.60 ms to the mean and 0.57 and 0.81 ms at
+p95 (pairs 1 and 2). With the scan running they added 0.15 ms and 0.27 ms (pair 3); the
+scan changes the load, so that pair is not averaged with the others. These are differences
+seen on this route, and repeats of the same setting differ by up to 0.25 ms. All six
+sessions held 59.9 fps in that stretch. One hand-played run without copies had a window
+of 300 presents at 31 fps, cause not identified. There are about three copies per frame.
+The four keys are enough in these runs; removing any of them was not tried, and 1.3.0
+was not tested.
+
 ## Interactive first battle — reached, completeness still under test
 
 `movie-03`: the opening VP9 movie rendered upright with visible colors and game
@@ -260,6 +401,75 @@ All these runs overlap whole-game shader compilation and use a partial cache
 without full-build uniform proof tables. They establish bring-up/input progress,
 not final picture completeness or performance. Final save/reload must verify
 game progress after a game-initiated commit, not merely an initialized save file.
+
+## Cutscene timing at 60 fps — 2026-11-07
+
+Game 1.4.1, 60 fps target. Memory captures compared 6 in play against 4 in a
+cutscene and found the mark in `runtime/host/hle_aoc_scene.c`. **User-confirmed:**
+in a full mission, cutscenes ran at 30 fps without speeding up and gameplay ran at
+60. In that session's log (31.1 minutes) the present interval goes from 1 to 2 in a
+cutscene and back to 1, and the stretch after it holds 59.2 fps for 6 minutes. Six
+scripted sessions on the final host each left a cutscene and held 59.9 fps in the
+4,000 frames measured after it.
+
+A signed 1.4.1 app built from this change repeated it by script: held from the title,
+the present interval back from 2 to 1 when the cutscene ended, and a median frame of
+16.8 to 16.9 ms after it. That watcher read the battle interface's state, so it also
+held the title screen, the map, menus and loading screens at 30 fps. It is replaced
+by the count below.
+
+## Cutscene state from the game's own count — 2026-11-10
+
+Game 1.4.1. The watcher now reads a count the game keeps at main+0x2783ad0: the holds
+on a shared resource, taken through main+0x8db820 and given back at main+0x8ae58c and
+main+0xb09b80, which clear the held pointer at main+0x2783ac8 when it reaches 0.
+
+- **Memory captures, one scripted route:** 55 captures every 5 s, each classified by
+  the screenshot taken at the same moment: title 7, map and mission menus 9, loading 1,
+  a narration screen 4, the mission's information screen 4, the opening in-engine
+  cutscene 18, battle 12. The count read 2 in all 18 cutscene captures and 1 in all 37
+  others. It fell back to 1 on the black frame that ends the cutscene.
+- **Memory captures from a mission played by hand (2026-11-06):** 2 in all 5 cutscene
+  captures, 1 in all 7 in play.
+- **Signed app from this change, the same route by script:** held once, for 89.9 s,
+  the opening cutscene; median frame 33 ms during it. Title, map, menus, loading and
+  battle stayed at 16.8 ms. One 20 s stretch at 34 ms came from the window losing focus
+  (the display link stalled and dropped frames), not from the watcher.
+
+The 1.3.0 offset is removed: it was never played by hand. 1.3.0 keeps its target through
+cutscenes. Not yet checked with this watcher: a whole mission played by hand,
+mid-mission cutscenes, and the DLC missions.
+
+## Pipeline warm-up list — 2026-11-08 to 2026-11-10
+
+- **The list.** `scripts/pso_seed.py --shader-map` (the 1.4.1 build's `shader_map.tsv`, 40,729 shaders) merged four recordings
+  in this order: a player profile's `pso_user.tsv`, two test profiles and one scripted session. Made again on 2026-11-10 with R
+  rows whose normalized key repeats an earlier one dropped: 1,385 lines with the header, 495 S, 848 R, 36 C. The 98 rows dropped
+  are the ones the host was already skipping, so the pipelines it builds are the same 848.
+- **Packaged and read** (2026-11-08, a signed 1.4.1 app whose tree also carried this branch's settings work, which does not
+  touch the warm-up): the app's `profile/pso_manifest.tsv` was byte-identical to the repository's, and one scripted session
+  from the save through the map and the cutscene into a battle built every S, R and C row at start, with no shader key outside
+  the map. The player list received no row: the route needed no pipeline outside the list.
+- **Repeats** (2026-11-09): the host logged `946 = 98 duplicate rows avoided + 0 skipped before Metal + 848 reached
+  compilation; 848 Metal calls (0 layer retries); 848 created, 0 failed` for the list as it was then.
+- **First launch against later ones** (2026-11-09, the same route, full screen, three of each): with the system's Metal cache
+  emptied first, the game built 12, 14 and 39 pipelines on demand (about 181 ms waiting, median); on the next launch, 1
+  (0.2 ms). The cold misses were rows the list already holds: the serial warm-up took 21-22 s and the game asked for them
+  first.
+- **Two compile workers** (2026-11-10): the same app, list, profile and route, first launch on an emptied Metal cache, in the
+  order serial, two, two, serial (`DM_PSO_WARM_THREADS=1` for serial). The app's tree also carried the 1440p output, 16:10 and
+  the settings work, which do not touch the warm-up.
+
+| | Serial | Two workers |
+|---|---|---|
+| Warm-up, all 848 | 21.2 s, 21.1 s | 14.1 s, 14.0 s |
+| Pipelines the game built on demand | 10 (150 ms), 10 (151 ms) | 4 (34 ms), 3 (35 ms) |
+| A frame of about 180 ms near frame 436 | in both | in neither |
+| First present | 1.06 s, 1.01 s | 0.99 s, 1.00 s |
+| Frames over 50 ms | 17, 19 | 17, 16 |
+
+  Every launch built all 848 with none failed, and closed in order. Two launches per arm.
+- 1.3.0 has not been checked against the list.
 
 ## Newly run source and native tests
 

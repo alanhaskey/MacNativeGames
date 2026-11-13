@@ -4,12 +4,10 @@
 /* Inherited from games/ot0 (a game that reserves 62 GiB): the alias region above 2^39. Xenoblade Chronicles 3 asks for a
    39-bit address space; it boots and plays with the region kept, its allocations sitting at 0x90_...-0x91_.... */
 #define GUEST_ALIAS_HIGH 1
-/* Names the host files copied from games/totk (frontend.m, settings_panel.h, contrib_submit.h) use. */
+/* Names the host files copied from games/totk (frontend.m, settings_panel.h) use. */
 #define GAME_NAME "Xenoblade Chronicles 3"
 #define GAME_FOLDER "XC3"   /* ~/Library/Application Support/MacNativeGames/XC3 */
 #define GAME_LOG "xc3"      /* ~/Library/Logs/MacNativeGames/xc3.log */
-#define GAME_CONTRIB_TEMPLATE ""   /* no shared shader list for this game: the panel's contribution button is hidden */
-#define GAME_CONTRIB_TITLE "Shader list (Xenoblade Chronicles 3)"
 /* Per-version addresses, on purpose none by default (as in games/dread): an address left over from another game must not
    compile. Each one is added here, per version, once it is found and checked in this game's own code. */
 #if defined(XC3_GAME_V100)
@@ -25,6 +23,10 @@
 #define XC3_RENDER_SCALE_SITES {{0xf5362c, 0xd2a7e00bu, 1},   /* mov  x11, #0x3f000000 (0.5, mode 1) */ \
                                 {0xf53640, 0xf2d5c28bu, 0},   /* movk x11, #0xae14, lsl #32 (low half of 0.53) */ \
                                 {0xf53644, 0xf2e7e0ebu, 1}}   /* movk x11, #0x3f07, lsl #48 (0.53, the other mode) */
+/* Frame wait (stage 14): the game's frame limiter (main+0x124fa34) spins until its frame time has passed, reading the clock
+   through main+0x124f120 -> nn::os::GetSystemTick about 76,000 times a second. {main offset of the return address into the
+   loop after that call, the instruction there}: the host's clock gate sleeps briefly when called from it (loader.c). */
+#define XC3_FRAME_WAIT_SITE {0x124fb44, 0x4ea01c08u}   /* blr x8 (elapsed time) returns here: mov v8.16b, v0.16b */
 #else
 #error "build with -DXC3_GAME_V100 or -DXC3_GAME_V221 (the Makefile's VERSION)"
 #endif

@@ -601,11 +601,30 @@ static void boot(void) {
 }
 /* Host aborts (e.g. Metal validation assertions) print the host call stack before the process ends. */
 #include <execinfo.h>
+void (*runtime_abort_hook)(void);   /* graphics layer diagnostics printed before the stack (nvn_queue_order.inc's event ring) */
 static void abort_report(int num) {
- (void)num;void *frames[64];int n=backtrace(frames,64);write(2,"[totk] host abort, call stack:\n",31);backtrace_symbols_fd(frames,n,2);
+ (void)num;void *frames[64];int n=backtrace(frames,64);if(runtime_abort_hook)runtime_abort_hook();write(2,"[totk] host abort, call stack:\n",31);backtrace_symbols_fd(frames,n,2);
  signal(SIGABRT,SIG_DFL);raise(SIGABRT);
 }
+#if !TARGET_OS_IPHONE
+#include <limits.h>
+#include <mach-o/dyld.h>
+/* The packaged Mac app runs this binary as its own executable (build_app.py: Contents/MacOS/<name>). Started that way it
+   is the launcher first (app/launcher.m), in this process: an app that execs another binary after it started is left out
+   of the Cmd+Tab switcher. Tools and tests run the binary from build/ with its arguments, as before. */
+int runtime_app_mode(void){
+ static int v=-1;if(v>=0)return v;
+ char p[PATH_MAX];uint32_t n=sizeof p;v=0;
+ if(!_NSGetExecutablePath(p,&n)){char *s=strrchr(p,'/');if(s){*s=0;size_t l=strlen(p);v=l>=15&&!strcmp(p+l-15,"/Contents/MacOS");}}
+ return v;
+}
+#else
+int runtime_app_mode(void){return 0;}
+#endif
 int main(int argc,char **argv) {
+#if !TARGET_OS_IPHONE
+ if(runtime_app_mode()){char **boot=NULL;int r=runtime_app_launch(argc,argv,&boot);if(r>=0)return r;argc=3;argv=boot;runtime_input_file_start();}
+#endif
  need(argc==3||(argc>3&&!strcmp(argv[2],"pipeline-archive"))||((argc==4||argc==5)&&!strcmp(argv[2],"seed-shaders")),"usage: totk-native rewritten-dir probe|boot (pipeline-archive <list>... | seed-shaders <corpus> [<shader list>])");
  /* One game or GPU probe at a time (memory, GPU time): wait for the slot before anything is loaded. */
  if(!strcmp(argv[2],"boot")||!strncmp(argv[2],"probe-gpu",9))runtime_game_slot_acquire(argv[2]);
@@ -627,5 +646,14 @@ int main(int argc,char **argv) {
 #endif
  verify_identity(!strcmp(argv[2],"probe-identity-negative"));
  for(unsigned i=0;i<NM;i++){seal(&modules[i]);check_permissions(&modules[i]);}
- if(!strcmp(argv[2],"probe-gpu-writeback")||!strcmp(argv[2],"probe-gpu-sampler-border")||!strcmp(argv[2],"probe-gpu-pool-retire")||!strcmp(argv[2],"probe-gpu-tex-slots")||!strcmp(argv[2],"probe-gpu-arg-epoch")||!strcmp(argv[2],"probe-gpu-anomaly")||!strcmp(argv[2],"probe-gpu-vertex-streams")||!strcmp(argv[2],"probe-gpu-vin")||!strcmp(argv[2],"probe-gpu-fout")||!strcmp(argv[2],"probe-gpu-pipeline-archive")||!strcmp(argv[2],"probe-gpu-layer-merge")||!strcmp(argv[2],"probe-gpu-cube-merge")||!strcmp(argv[2],"probe-gpu-texture-retire")||!strcmp(argv[2],"probe-gpu-texels-region")||!strcmp(argv[2],"probe-gpu-linear-rt")||!strcmp(argv[2],"probe-gpu-storage-view")||!strcmp(argv[2],"probe-gpu-compressed-alias")||!strcmp(argv[2],"probe-gpu-upload-batch")||!strcmp(argv[2],"probe-gpu-ds-clear")||!strcmp(argv[2],"probe-gpu-ub-rename")||!strcmp(argv[2],"probe-gpu-ubo-snapshot")||!strcmp(argv[2],"probe-gpu-drv-c0")||!strcmp(argv[2],"probe-gpu-dispatch-chain")||!strcmp(argv[2],"probe-gpu-copy-alias")||!strcmp(argv[2],"probe-gpu-srgb-view")||!strcmp(argv[2],"probe-gpu-depth-output"))runtime_gpu_path_probe(argv[2]);else if(!strcmp(argv[2],"probe-memory"))runtime_memory_probe();else if(!strcmp(argv[2],"probe-gfx"))runtime_gfx_probe(0);else if(!strcmp(argv[2],"probe-vpool"))runtime_vpool_probe();else if(!strcmp(argv[2],"probe-gpu-widen")||!strcmp(argv[2],"probe-gpu-blockrt")||!strcmp(argv[2],"probe-gpu-midclear")||!strcmp(argv[2],"probe-gpu-winding")||!strcmp(argv[2],"probe-gpu-tile"))runtime_gpu_path_probe(argv[2]);else if(!strcmp(argv[2],"probe-audio"))runtime_audio_probe();else if(!strcmp(argv[2],"probe-gfx-negative"))runtime_gfx_probe(1);else if(!strcmp(argv[2],"probe"))probe();else if(!strcmp(argv[2],"probe-fs"))runtime_fs_probe();else if(!strcmp(argv[2],"seed-shaders")){if(argc<4)runtime_fail("seed-shaders needs the corpus: <modules> seed-shaders <corpus.bin> (scripts/ns2_shader_corpus.py)");runtime_shader_seed(argv[3],argc>4?argv[4]:NULL);}else if(!strcmp(argv[2],"probe-swkbd"))runtime_swkbd_probe();else if(!strcmp(argv[2],"probe-save"))runtime_save_probe();else if(!strcmp(argv[2],"boot")){if(getenv("TOTK_VERIFY_STARTUP")||getenv("TOTK_HEADLESS"))boot();else runtime_front_run(boot);}else runtime_fail("unknown mode");return 0;
+#if defined(TOTK_GAME_V143) && !TARGET_OS_IPHONE
+ if(!strcmp(argv[2],"probe-quest-fov")){extern void runtime_totk_projection_probe(void);runtime_totk_projection_probe();return 0;}
+#endif
+#ifdef GAME_BOTW
+ if(!strcmp(argv[2],"probe-quest-fov")){extern void runtime_botw_projection_probe(void);runtime_botw_projection_probe();return 0;}
+#if !TARGET_OS_IPHONE
+ if(!strcmp(argv[2],"probe-vr-resolution")){extern void runtime_vr_resolution_probe(void);runtime_vr_resolution_probe();return 0;}
+#endif
+#endif
+ if(!strcmp(argv[2],"probe-gpu-vr-ui-layout")||!strcmp(argv[2],"probe-gpu-visibility")||!strcmp(argv[2],"probe-gpu-writeback")||!strcmp(argv[2],"probe-gpu-sampler-border")||!strcmp(argv[2],"probe-gpu-pool-retire")||!strcmp(argv[2],"probe-gpu-tex-slots")||!strcmp(argv[2],"probe-gpu-arg-epoch")||!strcmp(argv[2],"probe-gpu-anomaly")||!strcmp(argv[2],"probe-gpu-vertex-streams")||!strcmp(argv[2],"probe-gpu-vin")||!strcmp(argv[2],"probe-gpu-fout")||!strcmp(argv[2],"probe-gpu-pipeline-archive")||!strcmp(argv[2],"probe-gpu-layer-merge")||!strcmp(argv[2],"probe-gpu-cube-merge")||!strcmp(argv[2],"probe-gpu-texture-retire")||!strcmp(argv[2],"probe-gpu-texels-region")||!strcmp(argv[2],"probe-gpu-linear-rt")||!strcmp(argv[2],"probe-gpu-storage-view")||!strcmp(argv[2],"probe-gpu-compressed-alias")||!strcmp(argv[2],"probe-gpu-upload-batch")||!strcmp(argv[2],"probe-gpu-ds-clear")||!strcmp(argv[2],"probe-gpu-ub-rename")||!strcmp(argv[2],"probe-gpu-ubo-snapshot")||!strcmp(argv[2],"probe-gpu-drv-c0")||!strcmp(argv[2],"probe-gpu-dispatch-chain")||!strcmp(argv[2],"probe-gpu-copy-alias")||!strcmp(argv[2],"probe-gpu-srgb-view")||!strcmp(argv[2],"probe-gpu-depth-output"))runtime_gpu_path_probe(argv[2]);else if(!strcmp(argv[2],"probe-memory"))runtime_memory_probe();else if(!strcmp(argv[2],"probe-gfx"))runtime_gfx_probe(0);else if(!strcmp(argv[2],"probe-vpool"))runtime_vpool_probe();else if(!strcmp(argv[2],"probe-gpu-widen")||!strcmp(argv[2],"probe-gpu-blockrt")||!strcmp(argv[2],"probe-gpu-midclear")||!strcmp(argv[2],"probe-gpu-winding")||!strcmp(argv[2],"probe-gpu-tile"))runtime_gpu_path_probe(argv[2]);else if(!strcmp(argv[2],"probe-audio"))runtime_audio_probe();else if(!strcmp(argv[2],"probe-gfx-negative"))runtime_gfx_probe(1);else if(!strcmp(argv[2],"probe"))probe();else if(!strcmp(argv[2],"probe-fs"))runtime_fs_probe();else if(!strcmp(argv[2],"seed-shaders")){if(argc<4)runtime_fail("seed-shaders needs the corpus: <modules> seed-shaders <corpus.bin> (scripts/ns2_shader_corpus.py)");runtime_shader_seed(argv[3],argc>4?argv[4]:NULL);}else if(!strcmp(argv[2],"probe-swkbd"))runtime_swkbd_probe();else if(!strcmp(argv[2],"probe-save"))runtime_save_probe();else if(!strcmp(argv[2],"boot")){if(getenv("TOTK_VERIFY_STARTUP")||getenv("TOTK_HEADLESS"))boot();else runtime_front_run(boot);}else runtime_fail("unknown mode");return 0;
 }
